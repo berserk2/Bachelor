@@ -1332,13 +1332,15 @@ class ExperimentThread(QThread):
                     self.lsa_log_file = p; break
                 n += 1
 
-    def _execute_measurement_step(self, step_num: int, cur_volt: float, cur_freq: float, is_test_run: bool = False):
+    def _execute_measurement_step(self, step_num: int, cur_volt: float, cur_freq: float):
+        """Единый опрос всех активных приборов без холостых пропусков."""
         osc: Optional[RigolOscilloscopeDriver] = self.drivers.get('osc')
         sa: Optional[SpectrumAnalyzerDriver] = self.drivers.get('sa')
         pm: Optional[PowerMeterDriver] = self.drivers.get('pm')
         lsa: Optional[LSADriver] = self.drivers.get('lsa')
 
-        if self.task.use_pm and pm and self.pm_log_file and not is_test_run:
+        # 1. Измеритель мощности
+        if self.task.use_pm and pm and self.pm_log_file:
             try:
                 pm_data = pm.measure_power()
                 current_ma = cur_volt * 150.0
@@ -1354,7 +1356,8 @@ class ExperimentThread(QThread):
             except Exception as e:
                 self.log_msg.emit(f"Сбой PM: {e}")
 
-        if self.task.use_lsa and lsa and self.lsa_log_file and not is_test_run:
+        # 2. LSA
+        if self.task.use_lsa and lsa and self.lsa_log_file:
             try:
                 v_str = f"{cur_volt:.2f}".replace('.', '_')
                 smx_path = os.path.join(self.folders['lsa_smx'], f"LSA_step{step_num:03d}_{v_str}V.smx")
@@ -1372,25 +1375,25 @@ class ExperimentThread(QThread):
             except Exception as e:
                 self.log_msg.emit(f"Сбой LSA: {e}")
 
+        # 3. Осциллограф
         if self.task.use_osc and osc:
             try:
-                if not is_test_run:
-                    if self.task.osc_ch1_enabled:
-                        osc.save_channel_data(1, step_num, cur_volt,
-                                              self.folders['osc_wave'], self.folders['osc_meas'],
-                                              self.folders['osc_screen'])
-                    if self.task.osc_ch2_enabled:
-                        osc.save_channel_data(2, step_num, cur_volt,
-                                              self.folders['osc_wave'], self.folders['osc_meas'],
-                                              self.folders['osc_screen'])
+                if self.task.osc_ch1_enabled:
+                    osc.save_channel_data(1, step_num, cur_volt,
+                                          self.folders['osc_wave'], self.folders['osc_meas'],
+                                          self.folders['osc_screen'])
+                if self.task.osc_ch2_enabled:
+                    osc.save_channel_data(2, step_num, cur_volt,
+                                          self.folders['osc_wave'], self.folders['osc_meas'],
+                                          self.folders['osc_screen'])
                 osc.run()
             except Exception as e:
                 self.log_msg.emit(f"Сбой OSC: {e}")
 
+        # 4. Спектроанализатор
         if self.task.use_sa and sa:
             try:
-                if not is_test_run:
-                    sa.save_trace_csv(self.folders['sa_traces'], step_num, cur_volt, cur_freq)
+                sa.save_trace_csv(self.folders['sa_traces'], step_num, cur_volt, cur_freq)
             except Exception as e:
                 self.log_msg.emit(f"Сбой DSA: {e}")
 
@@ -1404,31 +1407,82 @@ class ExperimentThread(QThread):
             osc: Optional[RigolOscilloscopeDriver] = self.drivers.get('osc')
             sa: Optional[SpectrumAnalyzerDriver] = self.drivers.get('sa')
 
+            # Сохранение базовых настроек (ручной режим, 1 раз)
             if self.task.use_osc and osc and not self.task.osc_auto:
                 osc.save_state_json(self.exp_folder, -1)
             if self.task.use_sa and sa and not self.task.sa_auto:
                 sa.save_state_json(self.exp_folder, -1, mode_name="manual")
 
+            # Включение выходов генератора
             if self.task.use_gen and gen:
-                if self.task.target_ch in ["Канал 1", "Оба канала"]: gen.set_output(1, True)
-                if self.task.target_ch in ["Канал 2", "Оба канала"]: gen.set_output(2, True)
+                if self.task.target_ch in ["Канал 1", "Оба канала"]:
+                    gen.set_output(1, True)
+                if self.task.target_ch in ["Канал 2", "Оба канала"]:
+                    gen.set_output(2, True)
 
-            overhead_time = 0.0
+            # ==================================================================
+            # ШАГ 000: КАЛИБРОВКА И ПРОГРЕВ ТРАКТА (БЕЗ ПАУЗЫ)
+            # ==================================================================
             if self.task.auto_timing:
-                self.log_msg.emit("Запуск тестового забега для калибровки времени аппаратуры...")
+                self.log_msg.emit("Шаг 000 (Калибровка): прогрев аппаратуры и замер задержки...")
                 t_cal_start = time.perf_counter()
+
                 first_val = self.task.values[0]
                 c_volt = float(first_val) if self.task.mode == "DC" else float(first_val[1])
                 c_freq = self.task.sa_gen_freq if self.task.mode == "DC" else float(first_val[0])
-                self._execute_measurement_step(0, c_volt, c_freq, is_test_run=True)
+
+                # Предварительная подача начального сигнала
+                if self.task.use_gen and gen:
+                    try:
+                        if self.task.mode == "DC":
+                            if self.task.target_ch in ["Канал 1", "Оба канала"]:
+                                gen.safe_write(':SOUR1:FUNC DC')
+                                gen.safe_write(f':SOUR1:VOLT:OFFS {c_volt}')
+                            if self.task.target_ch in ["Канал 2", "Оба канала"]:
+                                gen.safe_write(':SOUR2:FUNC DC')
+                                gen.safe_write(f':SOUR2:VOLT:OFFS {c_volt}')
+                        elif self.task.mode == "SIN параметры":
+                            f, h, l = first_val
+                            if self.task.target_ch in ["Канал 1", "Оба канала"]:
+                                gen.safe_write(':SOUR1:FUNC SIN')
+                                gen.safe_write(f':SOUR1:FREQ {f}')
+                                gen.safe_write(f':SOUR1:VOLT:HIGH {h}')
+                                gen.safe_write(f':SOUR1:VOLT:LOW {l}')
+                            if self.task.target_ch in ["Канал 2", "Оба канала"]:
+                                gen.safe_write(':SOUR2:FUNC SIN')
+                                gen.safe_write(f':SOUR2:FREQ {f}')
+                                gen.safe_write(f':SOUR2:VOLT:HIGH {h}')
+                                gen.safe_write(f':SOUR2:VOLT:LOW {l}')
+                        else:
+                            f, h, l, w = first_val
+                            if self.task.target_ch in ["Канал 1", "Оба канала"]:
+                                gen.safe_write(':SOUR1:FUNC PULS')
+                                gen.safe_write(f':SOUR1:FREQ {f}')
+                                gen.safe_write(f':SOUR1:VOLT:HIGH {h}')
+                                gen.safe_write(f':SOUR1:VOLT:LOW {l}')
+                                gen.safe_write(f':SOUR1:PULS:WIDT {w}')
+                            if self.task.target_ch in ["Канал 2", "Оба канала"]:
+                                gen.safe_write(':SOUR2:FUNC PULS')
+                                gen.safe_write(f':SOUR2:FREQ {f}')
+                                gen.safe_write(f':SOUR2:VOLT:HIGH {h}')
+                                gen.safe_write(f':SOUR2:VOLT:LOW {l}')
+                                gen.safe_write(f':SOUR2:PULS:WIDT {w}')
+                    except Exception as e:
+                        self.log_msg.emit(f"Сбой генератора на шаге 000: {e}")
+
+                # Реальный замер всех подключенных приборов для шага 0
+                self._execute_measurement_step(0, c_volt, c_freq)
                 overhead_time = time.perf_counter() - t_cal_start
-                self.log_msg.emit(f"Аппаратный overhead приборов: {overhead_time:.3f} с")
+                self.log_msg.emit(f"Шаг 000 завершен. Аппаратный overhead: {overhead_time:.3f} с")
 
             num_steps = len(self.task.values)
 
+            # ==================================================================
+            # ОСНОВНОЙ ЦИКЛ ЭКСПЕРИМЕНТА
+            # ==================================================================
             for i in range(num_steps):
                 if not self._is_running:
-                    self.log_msg.emit("Остановлено пользователем.")
+                    self.log_msg.emit("Эксперимент остановлен пользователем.")
                     break
 
                 step_start_time = time.perf_counter()
@@ -1444,6 +1498,7 @@ class ExperimentThread(QThread):
 
                 self.log_msg.emit(f"Шаг {step_num}/{num_steps}: U={cur_volt:.3f} В")
 
+                # 1. Генератор: установка нового уровня сигнала
                 if self.task.use_gen and gen:
                     try:
                         if self.task.mode == "DC":
@@ -1484,6 +1539,7 @@ class ExperimentThread(QThread):
                     except Exception as e:
                         self.log_msg.emit(f"Сбой генератора: {e}")
 
+                # 2. Автоподстройка спектроанализатора под сигнал
                 if self.task.use_sa and sa and self.task.sa_auto:
                     try:
                         span = max(cur_freq * 0.1, 100000.0)
@@ -1493,6 +1549,7 @@ class ExperimentThread(QThread):
                     except Exception as e:
                         self.log_msg.emit(f"Сбой автонастройки DSA: {e}")
 
+                # 3. Автоподстройка осциллографа под сигнал
                 if self.task.use_osc and osc and self.task.osc_auto:
                     try:
                         osc.autoscale()
@@ -1500,18 +1557,21 @@ class ExperimentThread(QThread):
                     except Exception as e:
                         self.log_msg.emit(f"Сбой автонастройки осциллографа: {e}")
 
+                # 4. Пауза релаксации (если выключена автокомпенсация overhead)
                 if not self.task.auto_timing:
                     time.sleep(self.task.pause_s)
 
-                self._execute_measurement_step(step_num, cur_volt, cur_freq, is_test_run=False)
+                # 5. Снятие данных со всех активных приборов
+                self._execute_measurement_step(step_num, cur_volt, cur_freq)
 
+                # 6. Если включена автоподстройка: рассчитываем и выдерживаем остаток паузы
                 if self.task.auto_timing:
                     elapsed = time.perf_counter() - step_start_time
                     remaining_pause = self.task.pause_s - elapsed
                     if remaining_pause > 0:
                         time.sleep(remaining_pause)
                     else:
-                        self.log_msg.emit(f"  Overhead ({elapsed:.2f} с) превысил заданный период ({self.task.pause_s} с)")
+                        self.log_msg.emit(f"  Внимание: overhead приборов ({elapsed:.2f} с) превысил заданный период ({self.task.pause_s} с)")
 
                 self.progress.emit(step_num)
 
@@ -1526,11 +1586,10 @@ class ExperimentThread(QThread):
                     try:
                         gen_drv.set_output(1, False)
                         gen_drv.set_output(2, False)
-                        self.log_msg.emit("Генератор: выходы отключены (безопасность).")
+                        self.log_msg.emit("Генератор: выходы переведены в ВЫКЛ (безопасность).")
                     except Exception as e_gen:
                         self.log_msg.emit(f"Сбой отключения генератора: {e_gen}")
             self.finished_experiment.emit()
-
 
 # ==============================================================================
 # ПОТОК СКАНИРОВАНИЯ С ПРОВЕРКОЙ LSA.EXE И БЕЗОПАСНЫМ ОПРОСОМ VISA
