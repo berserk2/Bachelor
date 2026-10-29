@@ -22,15 +22,14 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QLineEdit, QPushButton, QComboBox,
     QCheckBox, QGroupBox, QTabWidget, QListWidget, QListWidgetItem,
-    QTextEdit, QProgressBar, QFileDialog, QMessageBox, QTableWidget,
-    QTableWidgetItem
+    QTextEdit, QProgressBar, QFileDialog, QMessageBox
 )
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor
 
 
 # ==============================================================================
-# МОДЕЛИ СОСТОЯНИЯ
+# МОДЕЛИ ДАННЫХ
 # ==============================================================================
 @dataclass
 class ChannelState:
@@ -73,15 +72,12 @@ class RigolGeneratorDriver:
     def safe_write(self, cmd: str):
         try:
             self.dev.write(cmd)
-            time.sleep(0.05)
         except Exception as e:
             raise RuntimeError(f"Сбой записи в генератор [{cmd}]: {str(e)}")
 
     def safe_query(self, cmd: str) -> str:
         try:
-            res = self.dev.query(cmd)
-            time.sleep(0.05)
-            return res.strip()
+            return self.dev.query(cmd).strip()
         except Exception as e:
             raise RuntimeError(f"Сбой запроса к генератору [{cmd}]: {str(e)}")
 
@@ -93,7 +89,6 @@ class RigolGeneratorDriver:
         self.safe_write(f':SOUR{ch}:FUNC {state.waveform}')
         if state.waveform == "DC":
             self.safe_write(f':SOUR{ch}:VOLT:OFFS {state.offset}')
-            self.safe_write(f':SOUR{ch}:VOLT 0')
         elif state.waveform == "PULS":
             self.safe_write(f':SOUR{ch}:FREQ {state.freq}')
             self.safe_write(f':SOUR{ch}:VOLT:HIGH {state.high}')
@@ -117,7 +112,6 @@ class RigolGeneratorDriver:
             if wf == "DC":
                 if "offset_v" in ch:
                     self.safe_write(f':SOUR{ch_num}:VOLT:OFFS {ch["offset_v"]}')
-                    self.safe_write(f':SOUR{ch_num}:VOLT 0')
             else:
                 if "frequency_hz" in ch:
                     self.safe_write(f':SOUR{ch_num}:FREQ {ch["frequency_hz"]}')
@@ -189,15 +183,125 @@ class RigolOscilloscopeDriver:
         except Exception as e:
             raise RuntimeError(f"Сбой запроса к осциллографу [{cmd}]: {str(e)}")
 
+    def apply_state(self, state: OscilloscopeState):
+        self.safe_write(f':CHAN1:SCAL {state.vscale}')
+        self.safe_write(f':CHAN2:SCAL {state.vscale}')
+        self.safe_write(f':TIM:SCAL {state.timebase}')
+        self.safe_write(f':TRIG:EDGE:LEV {state.trigger_level}')
+
+        ch1_disp = "ON" if state.ch1_enabled else "OFF"
+        self.safe_write(f':CHAN1:DISP {ch1_disp}')
+        if state.ch1_enabled:
+            self.safe_write(f':CHAN1:OFFS {state.ch1_offset}')
+
+        ch2_disp = "ON" if state.ch2_enabled else "OFF"
+        self.safe_write(f':CHAN2:DISP {ch2_disp}')
+        if state.ch2_enabled:
+            self.safe_write(f':CHAN2:OFFS {state.ch2_offset}')
+
     def autoscale(self):
         self.safe_write(':AUT')
-        time.sleep(1.5)  # Минимальное время на аппаратную реакцию реле
+        time.sleep(1.5)
 
     def run(self):
         self.safe_write(':RUN')
 
     def stop(self):
         self.safe_write(':STOP')
+
+    def get_screenshot(self, filepath: str):
+        try:
+            self.safe_write(':SAVE:IMAGE:FORMAT PNG')
+            time.sleep(0.3)
+            self.safe_write(':DISP:DATA?')
+            raw_data = self.dev.read_raw()
+            if raw_data.startswith(b'#'):
+                n_len = int(chr(raw_data[1]))
+                img_data = raw_data[2 + n_len:]
+            else:
+                img_data = raw_data
+
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, 'wb') as f:
+                f.write(img_data)
+        except Exception as e:
+            raise RuntimeError(f"Ошибка сохранения скриншота осциллографа: {str(e)}")
+
+    def save_state_json(self, folder_path: str, step: int):
+        if step == -1:
+            settings_folder = os.path.join(folder_path, "OscilloscopeSettings")
+            filename = f"osc_settings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        else:
+            settings_folder = os.path.join(folder_path, "OscilloscopeSettings", "ByStep")
+            filename = f"osc_state_step_{step:03d}.json"
+
+        os.makedirs(settings_folder, exist_ok=True)
+
+        try: vscale1 = float(self.safe_query(':CHAN1:SCAL?'))
+        except Exception: vscale1 = 1.0
+        try: vscale2 = float(self.safe_query(':CHAN2:SCAL?'))
+        except Exception: vscale2 = 1.0
+        try: timebase = float(self.safe_query(':TIM:SCAL?'))
+        except Exception: timebase = 1e-6
+        try: ch1_enabled = (self.safe_query(':CHAN1:DISP?') == '1')
+        except Exception: ch1_enabled = True
+        try: ch2_enabled = (self.safe_query(':CHAN2:DISP?') == '1')
+        except Exception: ch2_enabled = True
+        try: ch1_offset = float(self.safe_query(':CHAN1:OFFS?'))
+        except Exception: ch1_offset = 0.0
+        try: ch2_offset = float(self.safe_query(':CHAN2:OFFS?'))
+        except Exception: ch2_offset = 0.0
+
+        try: trig_lev = float(self.safe_query(':TRIG:EDGE:LEV?'))
+        except Exception: trig_lev = 0.0
+        try: trig_swe = self.safe_query(':TRIG:SWE?')
+        except Exception: trig_swe = "UNKNOWN"
+        try: trig_mod = self.safe_query(':TRIG:MODE?')
+        except Exception: trig_mod = "UNKNOWN"
+        try: trig_src = self.safe_query(':TRIG:EDGE:SOUR?')
+        except Exception: trig_src = "UNKNOWN"
+        try: trig_slp = self.safe_query(':TRIG:EDGE:SLOP?')
+        except Exception: trig_slp = "UNKNOWN"
+
+        settings = {
+            "step": step if step >= 0 else None,
+            "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "channel1": {"enabled": ch1_enabled, "scale_vdiv": vscale1, "offset_v": ch1_offset},
+            "channel2": {"enabled": ch2_enabled, "scale_vdiv": vscale2, "offset_v": ch2_offset},
+            "timebase_sdiv": timebase,
+            "trigger": {
+                "level_v": trig_lev, "sweep_mode": trig_swe,
+                "type": trig_mod, "source": trig_src, "slope": trig_slp
+            }
+        }
+
+        json_file = os.path.join(settings_folder, filename)
+        with open(json_file, 'w', encoding='utf-8') as f:
+            json.dump(settings, f, indent=4, ensure_ascii=False)
+
+    def load_state_from_json(self, json_file: str):
+        with open(json_file, 'r', encoding='utf-8') as f:
+            settings = json.load(f)
+
+        if "channel1" in settings:
+            ch1 = settings["channel1"]
+            if "scale_vdiv" in ch1: self.safe_write(f':CHAN1:SCAL {ch1["scale_vdiv"]}')
+            if "enabled" in ch1: self.safe_write(f':CHAN1:DISP {"ON" if ch1["enabled"] else "OFF"}')
+            if "offset_v" in ch1: self.safe_write(f':CHAN1:OFFS {ch1["offset_v"]}')
+
+        if "channel2" in settings:
+            ch2 = settings["channel2"]
+            if "scale_vdiv" in ch2: self.safe_write(f':CHAN2:SCAL {ch2["scale_vdiv"]}')
+            if "enabled" in ch2: self.safe_write(f':CHAN2:DISP {"ON" if ch2["enabled"] else "OFF"}')
+            if "offset_v" in ch2: self.safe_write(f':CHAN2:OFFS {ch2["offset_v"]}')
+
+        if "timebase_sdiv" in settings:
+            self.safe_write(f':TIM:SCAL {settings["timebase_sdiv"]}')
+
+        if "trigger" in settings:
+            trig = settings["trigger"]
+            if "level_v" in trig: self.safe_write(f':TRIG:EDGE:LEV {trig["level_v"]}')
+            if "sweep_mode" in trig: self.safe_write(f':TRIG:SWE {trig["sweep_mode"]}')
 
     def save_channel_data(self, channel: int, step: int, voltage: float,
                           waveforms_folder: str, measurements_folder: str,
@@ -207,7 +311,6 @@ class RigolOscilloscopeDriver:
         base_name = f"CH{channel}_{voltage_str}V_step{step:03d}"
 
         self.safe_write(f':CHAN{channel}:DISP ON')
-        # Быстрый снимок: стоп для считывания зафиксированного кадра
         self.stop()
 
         self.safe_write(f':WAV:SOUR CHAN{channel}')
@@ -281,8 +384,10 @@ class RigolOscilloscopeDriver:
         return measurements
 
     def close(self):
-        try: self.dev.close()
-        except Exception: pass
+        try:
+            self.dev.close()
+        except Exception:
+            pass
 
 
 # ==============================================================================
@@ -292,27 +397,23 @@ class SpectrumAnalyzerDriver:
     def __init__(self, resource):
         self.dev = resource
         self.dev.timeout = 10000
-        # Очищаем только статусные регистры/буфер ошибок (не сбрасывая частоты и настройки)
         try:
             self.dev.write('*cls')
-            time.sleep(0.05)
         except Exception:
             pass
 
     def safe_write(self, cmd: str):
         try:
             self.dev.write(cmd)
-            time.sleep(0.1)
+            time.sleep(0.05)
         except Exception as e:
             raise RuntimeError(f"Сбой записи в DSA [{cmd}]: {str(e)}")
 
     def safe_query(self, cmd: str) -> str:
-        """Безопасный запрос с паузой между записью и чтением (раздельные write/read)."""
         try:
             self.dev.write(cmd)
-            time.sleep(0.15)
-            res = self.dev.read().strip()
-            return res
+            time.sleep(0.1)
+            return self.dev.read().strip()
         except Exception as e:
             raise RuntimeError(f"Сбой запроса к DSA [{cmd}]: {str(e)}")
 
@@ -327,15 +428,11 @@ class SpectrumAnalyzerDriver:
     def find_peak(self) -> Tuple[float, float]:
         self.safe_write(':calc:mark1:stat on')
         self.safe_write(':calc:mark1:max')
-        time.sleep(0.3)
-        try:
-            peak_freq = float(self.safe_query(':calc:mark1:x?'))
-        except Exception:
-            peak_freq = 0.0
-        try:
-            peak_amp = float(self.safe_query(':calc:mark1:y?'))
-        except Exception:
-            peak_amp = 0.0
+        time.sleep(0.2)
+        try: peak_freq = float(self.safe_query(':calc:mark1:x?'))
+        except Exception: peak_freq = 0.0
+        try: peak_amp = float(self.safe_query(':calc:mark1:y?'))
+        except Exception: peak_amp = 0.0
         return peak_freq, peak_amp
 
     def save_state_json(self, folder_path: str, step: int, mode_name: str = "manual"):
@@ -354,30 +451,18 @@ class SpectrumAnalyzerDriver:
             "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
         }
 
-        # Безопасный последовательный опрос в нижнем регистре
         try: settings["center_freq_hz"] = float(self.safe_query(':sens:freq:cent?'))
         except Exception: settings["center_freq_hz"] = 0.0
-
         try: settings["span_hz"] = float(self.safe_query(':sens:freq:span?'))
         except Exception: settings["span_hz"] = 0.0
-
         try: settings["start_freq_hz"] = float(self.safe_query(':sens:freq:start?'))
         except Exception: settings["start_freq_hz"] = 0.0
-
         try: settings["stop_freq_hz"] = float(self.safe_query(':sens:freq:stop?'))
         except Exception: settings["stop_freq_hz"] = 0.0
-
         try: settings["rbw_hz"] = float(self.safe_query(':sens:band:res?'))
         except Exception: settings["rbw_hz"] = 0.0
-
         try: settings["vbw_hz"] = float(self.safe_query(':sens:band:video?'))
         except Exception: settings["vbw_hz"] = 0.0
-
-        try: settings["sweep_time_s"] = float(self.safe_query(':sens:sweep:time?'))
-        except Exception: settings["sweep_time_s"] = 0.0
-
-        try: settings["input_attenuation_db"] = float(self.safe_query(':sens:pow:att?'))
-        except Exception: settings["input_attenuation_db"] = 0.0
 
         json_file = os.path.join(settings_folder, filename)
         with open(json_file, 'w', encoding='utf-8') as f:
@@ -398,24 +483,16 @@ class SpectrumAnalyzerDriver:
 
     def save_trace_csv(self, traces_folder: str, step: int, voltage: float, gen_freq: float = 0):
         try:
-            # 1. Считываем фактическое время развертки, чтобы подождать завершения
-            try:
-                sweep_time = float(self.safe_query(':sens:sweep:time?'))
-            except Exception:
-                sweep_time = 1.0
+            try: sweep_time = float(self.safe_query(':sens:sweep:time?'))
+            except Exception: sweep_time = 1.0
 
-            # 2. Остановка непрерывного режима и запуск однократного прохода
             self.safe_write(':init:cont off')
-            time.sleep(0.1)
             self.safe_write(':init:imm')
+            time.sleep(max(sweep_time + 0.2, 1.2))
 
-            # Ждем полное время развертки + запас на обработку
-            time.sleep(max(sweep_time + 0.3, 1.5))
-
-            # 3. Запрос данных трассы (через write + read)
             self.safe_write(':form ascii')
             self.dev.write(':trace:data? trace1')
-            time.sleep(0.3)
+            time.sleep(0.2)
             raw_response = self.dev.read().strip()
 
             if raw_response.startswith('#'):
@@ -431,10 +508,8 @@ class SpectrumAnalyzerDriver:
             for v in data_part.split(','):
                 v = v.strip()
                 if v:
-                    try:
-                        amps.append(float(v))
-                    except ValueError:
-                        continue
+                    try: amps.append(float(v))
+                    except ValueError: continue
 
             if not amps:
                 raise RuntimeError("Пустая трасса спектроанализатора.")
@@ -442,12 +517,10 @@ class SpectrumAnalyzerDriver:
             amps_array = np.array(amps)
             num_points = len(amps_array)
 
-            # 4. Читаем диапазон частот для построения оси X
             start_freq_hz = float(self.safe_query(':sens:freq:start?'))
             stop_freq_hz = float(self.safe_query(':sens:freq:stop?'))
             freqs_mhz = np.linspace(start_freq_hz / 1e6, stop_freq_hz / 1e6, num_points)
 
-            # 5. Сохранение файла
             os.makedirs(traces_folder, exist_ok=True)
             voltage_str = f"{voltage:.2f}".replace('.', '_')
             if gen_freq > 0:
@@ -459,15 +532,11 @@ class SpectrumAnalyzerDriver:
             df = pd.DataFrame({'Frequency_MHz': freqs_mhz, 'Amplitude_dBm': amps_array})
             df.to_csv(filepath, index=False, sep=';', decimal=',', encoding='utf-8-sig')
 
-            # 6. Возвращаем анализатор в непрерывный режим работы
             self.safe_write(':init:cont on')
             return freqs_mhz, amps_array
-
         except Exception as e:
-            try:
-                self.safe_write(':init:cont on')
-            except Exception:
-                pass
+            try: self.safe_write(':init:cont on')
+            except Exception: pass
             raise RuntimeError(f"Сбой сохранения трассы анализатора: {str(e)}")
 
     def close(self):
@@ -475,6 +544,7 @@ class SpectrumAnalyzerDriver:
             self.dev.close()
         except Exception:
             pass
+
 
 # ==============================================================================
 # АППАРАТНЫЙ ДРАЙВЕР ИЗМЕРИТЕЛЯ МОЩНОСТИ (PM100USB)
@@ -526,8 +596,11 @@ class PowerMeterDriver:
             raise RuntimeError(f"Ошибка чтения PM100USB: {str(e)}")
 
     def close(self):
-        try: self.dev.close()
-        except Exception: pass
+        try:
+            self.dev.close()
+        except Exception:
+            pass
+
 
 # ==============================================================================
 # АППАРАТНЫЙ ДРАЙВЕР ОПТИЧЕСКОГО АНАЛИЗАТОРА (LSA)
@@ -540,7 +613,6 @@ class LSADriver:
 
     @staticmethod
     def is_process_running(process_name: str = "LSA.exe") -> bool:
-        """Проверяет через tasklist Windows, запущен ли LSA.exe"""
         try:
             output = subprocess.check_output('tasklist', shell=True).decode('cp866', errors='ignore')
             return process_name.lower() in output.lower()
@@ -548,7 +620,6 @@ class LSADriver:
             return False
 
     def ping_bridge(self) -> bool:
-        """Проверка связи с UDP мостом"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.settimeout(0.5)
@@ -624,6 +695,7 @@ class LSADriver:
             return csv_path
         except Exception as e:
             raise RuntimeError(f"Ошибка конвертации SMX->CSV: {str(e)}")
+
 
 # ==============================================================================
 # UI ПАНЕЛИ
@@ -948,7 +1020,7 @@ class ExperimentTask:
     use_pm: bool = True
     use_lsa: bool = True
 
-    auto_timing: bool = False  # Флаг компенсации overhead
+    auto_timing: bool = False
 
     osc_ch1_enabled: bool = True
     osc_ch2_enabled: bool = True
@@ -968,7 +1040,6 @@ class ExperimentPanel(QWidget):
     def init_ui(self):
         layout = QVBoxLayout(self)
 
-        # Выбор приборов в цикле (по умолчанию все включены)
         dev_group = QGroupBox("Приборы в цикле")
         dev_layout = QHBoxLayout(dev_group)
         self.check_gen = QCheckBox("Генератор")
@@ -989,7 +1060,6 @@ class ExperimentPanel(QWidget):
         dev_layout.addWidget(self.check_lsa)
         layout.addWidget(dev_group)
 
-        # Режим управления паузой
         timing_group = QGroupBox("Управление синхронизацией времени")
         timing_layout = QHBoxLayout(timing_group)
         timing_layout.addWidget(QLabel("Режим паузы между шагами:"))
@@ -1001,7 +1071,6 @@ class ExperimentPanel(QWidget):
         timing_layout.addWidget(self.combo_timing_mode)
         layout.addWidget(timing_group)
 
-        # Каталог
         folder_group = QGroupBox("Каталог сохранения")
         f_layout = QHBoxLayout(folder_group)
         self.path_input = QLineEdit(str(Path.home() / 'Rigol_Measurements'))
@@ -1011,7 +1080,6 @@ class ExperimentPanel(QWidget):
         f_layout.addWidget(self.btn_browse)
         layout.addWidget(folder_group)
 
-        # Параметры развертки
         mode_group = QGroupBox("Параметры развёртки")
         m_layout = QVBoxLayout(mode_group)
 
@@ -1033,7 +1101,6 @@ class ExperimentPanel(QWidget):
         top_m.addWidget(self.pause_input)
         m_layout.addLayout(top_m)
 
-        # DC
         self.dc_box = QWidget()
         dc_l = QHBoxLayout(self.dc_box)
         dc_l.addWidget(QLabel("Старт (В):"))
@@ -1047,7 +1114,6 @@ class ExperimentPanel(QWidget):
         dc_l.addWidget(self.dc_steps)
         m_layout.addWidget(self.dc_box)
 
-        # SIN
         self.sin_box = QWidget()
         sin_l = QGridLayout(self.sin_box)
         sin_l.addWidget(QLabel("Старт Freq (Гц):"), 0, 0)
@@ -1077,7 +1143,6 @@ class ExperimentPanel(QWidget):
         m_layout.addWidget(self.sin_box)
         self.sin_box.setVisible(False)
 
-        # PULSE
         self.pulse_box = QWidget()
         pulse_l = QGridLayout(self.pulse_box)
         pulse_l.addWidget(QLabel("Старт Freq (Гц):"), 0, 0)
@@ -1204,6 +1269,7 @@ class ExperimentPanel(QWidget):
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
 
+
 # ==============================================================================
 # ПОТОК ВЫПОЛНЕНИЯ ЭКСПЕРИМЕНТА
 # ==============================================================================
@@ -1267,14 +1333,11 @@ class ExperimentThread(QThread):
                 n += 1
 
     def _execute_measurement_step(self, step_num: int, cur_volt: float, cur_freq: float, is_test_run: bool = False):
-        """Единая точка опроса только тех приборов, которые отмечены галочками."""
-        gen: Optional[RigolGeneratorDriver] = self.drivers.get('gen')
         osc: Optional[RigolOscilloscopeDriver] = self.drivers.get('osc')
         sa: Optional[SpectrumAnalyzerDriver] = self.drivers.get('sa')
         pm: Optional[PowerMeterDriver] = self.drivers.get('pm')
         lsa: Optional[LSADriver] = self.drivers.get('lsa')
 
-        # 1. Измеритель мощности
         if self.task.use_pm and pm and self.pm_log_file and not is_test_run:
             try:
                 pm_data = pm.measure_power()
@@ -1291,7 +1354,6 @@ class ExperimentThread(QThread):
             except Exception as e:
                 self.log_msg.emit(f"Сбой PM: {e}")
 
-        # 2. LSA
         if self.task.use_lsa and lsa and self.lsa_log_file and not is_test_run:
             try:
                 v_str = f"{cur_volt:.2f}".replace('.', '_')
@@ -1310,7 +1372,6 @@ class ExperimentThread(QThread):
             except Exception as e:
                 self.log_msg.emit(f"Сбой LSA: {e}")
 
-        # 3. Осциллограф
         if self.task.use_osc and osc:
             try:
                 if not is_test_run:
@@ -1326,7 +1387,6 @@ class ExperimentThread(QThread):
             except Exception as e:
                 self.log_msg.emit(f"Сбой OSC: {e}")
 
-        # 4. Спектроанализатор
         if self.task.use_sa and sa:
             try:
                 if not is_test_run:
@@ -1341,17 +1401,21 @@ class ExperimentThread(QThread):
             self._init_log_files()
 
             gen: Optional[RigolGeneratorDriver] = self.drivers.get('gen')
+            osc: Optional[RigolOscilloscopeDriver] = self.drivers.get('osc')
+            sa: Optional[SpectrumAnalyzerDriver] = self.drivers.get('sa')
+
+            if self.task.use_osc and osc and not self.task.osc_auto:
+                osc.save_state_json(self.exp_folder, -1)
+            if self.task.use_sa and sa and not self.task.sa_auto:
+                sa.save_state_json(self.exp_folder, -1, mode_name="manual")
 
             if self.task.use_gen and gen:
                 if self.task.target_ch in ["Канал 1", "Оба канала"]: gen.set_output(1, True)
                 if self.task.target_ch in ["Канал 2", "Оба канала"]: gen.set_output(2, True)
 
-            # ==================================================================
-            # ТЕСТОВЫЙ КАЛИБРОВОЧНЫЙ ШАГ (ПРОГРЕВ И ЗАМЕР OVERHEAD)
-            # ==================================================================
             overhead_time = 0.0
             if self.task.auto_timing:
-                self.log_msg.emit("Запуск тестового забега для калибровки задержек аппаратуры...")
+                self.log_msg.emit("Запуск тестового забега для калибровки времени аппаратуры...")
                 t_cal_start = time.perf_counter()
                 first_val = self.task.values[0]
                 c_volt = float(first_val) if self.task.mode == "DC" else float(first_val[1])
@@ -1362,9 +1426,6 @@ class ExperimentThread(QThread):
 
             num_steps = len(self.task.values)
 
-            # ==================================================================
-            # ОСНОВНОЙ ЦИКЛ
-            # ==================================================================
             for i in range(num_steps):
                 if not self._is_running:
                     self.log_msg.emit("Остановлено пользователем.")
@@ -1383,7 +1444,6 @@ class ExperimentThread(QThread):
 
                 self.log_msg.emit(f"Шаг {step_num}/{num_steps}: U={cur_volt:.3f} В")
 
-                # 1. Подача сигнала с генератора (только если стоит галочка)
                 if self.task.use_gen and gen:
                     try:
                         if self.task.mode == "DC":
@@ -1424,21 +1484,34 @@ class ExperimentThread(QThread):
                     except Exception as e:
                         self.log_msg.emit(f"Сбой генератора: {e}")
 
-                # 2. Пауза воздействия (чистая пауза перед замером)
+                if self.task.use_sa and sa and self.task.sa_auto:
+                    try:
+                        span = max(cur_freq * 0.1, 100000.0)
+                        rbw = max(span * 0.01, 1000.0)
+                        sa.apply_settings(center_freq=cur_freq, span=span, rbw=rbw, vbw=rbw)
+                        sa.save_state_json(self.exp_folder, step_num, mode_name="auto")
+                    except Exception as e:
+                        self.log_msg.emit(f"Сбой автонастройки DSA: {e}")
+
+                if self.task.use_osc and osc and self.task.osc_auto:
+                    try:
+                        osc.autoscale()
+                        osc.save_state_json(self.exp_folder, step_num)
+                    except Exception as e:
+                        self.log_msg.emit(f"Сбой автонастройки осциллографа: {e}")
+
                 if not self.task.auto_timing:
                     time.sleep(self.task.pause_s)
 
-                # 3. Синхронное снятие данных
                 self._execute_measurement_step(step_num, cur_volt, cur_freq, is_test_run=False)
 
-                # 4. Если включена автоподстройка: компенсируем overhead
                 if self.task.auto_timing:
                     elapsed = time.perf_counter() - step_start_time
                     remaining_pause = self.task.pause_s - elapsed
                     if remaining_pause > 0:
                         time.sleep(remaining_pause)
                     else:
-                        self.log_msg.emit(f"  Внимание: overhead приборов ({elapsed:.2f} с) превысил заданный период ({self.task.pause_s} с)")
+                        self.log_msg.emit(f"  Overhead ({elapsed:.2f} с) превысил заданный период ({self.task.pause_s} с)")
 
                 self.progress.emit(step_num)
 
@@ -1458,8 +1531,9 @@ class ExperimentThread(QThread):
                         self.log_msg.emit(f"Сбой отключения генератора: {e_gen}")
             self.finished_experiment.emit()
 
+
 # ==============================================================================
-# ПОТОК ОБНАРУЖЕНИЯ ПРИБОРОВ
+# ПОТОК СКАНИРОВАНИЯ С ПРОВЕРКОЙ LSA.EXE И БЕЗОПАСНЫМ ОПРОСОМ VISA
 # ==============================================================================
 class DeviceScanThread(QThread):
     device_found = pyqtSignal(str, str, object)
@@ -1473,14 +1547,12 @@ class DeviceScanThread(QThread):
 
     def run(self):
         try:
-            # 1. Проверяем статус LSA.exe и UDP моста
             is_lsa_ready, lsa_msg = self.lsa_driver.check_ready()
             if is_lsa_ready:
                 self.device_found.emit("Оптический анализатор (LSA.exe активен)", "UDP:5006", self.lsa_driver)
             else:
                 self.device_found.emit(f"Оптический анализатор (Недоступен: {lsa_msg})", "UDP:5006", None)
 
-            # 2. Сканирование VISA приборов
             resources = self.rm.list_resources()
             for res in resources:
                 if 'ASRL10' in res or 'ASRL11' in res:
@@ -1501,12 +1573,12 @@ class DeviceScanThread(QThread):
                     if 'DG' in res_u or 'DG' in idn:
                         name = f"Генератор ({idn.split(',')[1] if ',' in idn else 'Rigol DG'})"
                         drv = RigolGeneratorDriver(raw_dev)
-                    elif 'DS' in res_u or 'MSO' in res_u or 'DS' in idn:
-                        name = f"Осциллограф ({idn.split(',')[1] if ',' in idn else 'Rigol DS'})"
-                        drv = RigolOscilloscopeDriver(raw_dev)
                     elif 'DSA' in res_u or 'DSA' in idn:
                         name = f"Спектроанализатор ({idn.split(',')[1] if ',' in idn else 'Rigol DSA'})"
                         drv = SpectrumAnalyzerDriver(raw_dev)
+                    elif 'DS' in res_u or 'MSO' in res_u or 'DS' in idn:
+                        name = f"Осциллограф ({idn.split(',')[1] if ',' in idn else 'Rigol DS'})"
+                        drv = RigolOscilloscopeDriver(raw_dev)
                     elif 'ASRL' in res_u or 'PM' in res_u:
                         name = "Измеритель мощности (PM100USB)"
                         drv = PowerMeterDriver(raw_dev)
@@ -1520,6 +1592,7 @@ class DeviceScanThread(QThread):
             self.error_occurred.emit(f"Ошибка сканирования: {e}")
         finally:
             self.finished_scan.emit()
+
 
 # ==============================================================================
 # ГЛАВНОЕ ОКНО ПРИЛОЖЕНИЯ
@@ -1548,7 +1621,7 @@ class RigolControlApp(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        conn_box = QGroupBox("Обнаружение приборов (безопасное обновление без сброса)")
+        conn_box = QGroupBox("Обнаружение приборов")
         conn_l = QVBoxLayout(conn_box)
         top_c = QHBoxLayout()
         self.btn_scan = QPushButton("Обновить устройства")
@@ -1709,22 +1782,16 @@ class RigolControlApp(QMainWindow):
 
     def close_all_drivers(self):
         if self.gen_driver:
-            self.gen_driver.close()
-            self.gen_driver = None
+            self.gen_driver.close(); self.gen_driver = None
         if self.osc_driver:
-            self.osc_driver.close()
-            self.osc_driver = None
+            self.osc_driver.close(); self.osc_driver = None
         if self.sa_driver:
-            self.sa_driver.close()
-            self.sa_driver = None
+            self.sa_driver.close(); self.sa_driver = None
         if self.pm_driver:
-            self.pm_driver.close()
-            self.pm_driver = None
+            self.pm_driver.close(); self.pm_driver = None
 
-        try:
-            self.rm.close()
-        except Exception:
-            pass
+        try: self.rm.close()
+        except Exception: pass
         self.rm = pyvisa.ResourceManager()
 
     def start_scan(self):
@@ -1747,7 +1814,7 @@ class RigolControlApp(QMainWindow):
 
     def on_device_found(self, name: str, port: str, driver: Any):
         item = QListWidgetItem(f"{name} [{port}]")
-        if "Неизвестное" not in name and "Сбой" not in name:
+        if "Недоступен" not in name and "Неизвестное" not in name and "Сбой" not in name:
             item.setForeground(QColor("green"))
         self.list_devices.addItem(item)
 
@@ -1764,8 +1831,6 @@ class RigolControlApp(QMainWindow):
         osc_state = self.panel_osc.get_state()
         task.osc_ch1_enabled = osc_state.ch1_enabled
         task.osc_ch2_enabled = osc_state.ch2_enabled
-        
-        # Получаем флаги автонастройки из выпадающих списков
         task.osc_auto = self.panel_osc.is_auto_scale_enabled()
         task.sa_auto = self.panel_sa.is_auto_tune_enabled()
 
