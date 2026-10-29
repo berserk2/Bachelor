@@ -180,154 +180,24 @@ class RigolOscilloscopeDriver:
     def safe_write(self, cmd: str):
         try:
             self.dev.write(cmd)
-            time.sleep(0.05)
         except Exception as e:
             raise RuntimeError(f"Сбой записи в осциллограф [{cmd}]: {str(e)}")
 
     def safe_query(self, cmd: str) -> str:
         try:
-            res = self.dev.query(cmd)
-            time.sleep(0.05)
-            return res.strip()
+            return self.dev.query(cmd).strip()
         except Exception as e:
             raise RuntimeError(f"Сбой запроса к осциллографу [{cmd}]: {str(e)}")
 
-    def apply_state(self, state: OscilloscopeState):
-        self.safe_write(f':CHAN1:SCAL {state.vscale}')
-        self.safe_write(f':CHAN2:SCAL {state.vscale}')
-        self.safe_write(f':TIM:SCAL {state.timebase}')
-        self.safe_write(f':TRIG:EDGE:LEV {state.trigger_level}')
-
-        ch1_disp = "ON" if state.ch1_enabled else "OFF"
-        self.safe_write(f':CHAN1:DISP {ch1_disp}')
-        if state.ch1_enabled:
-            self.safe_write(f':CHAN1:OFFS {state.ch1_offset}')
-
-        ch2_disp = "ON" if state.ch2_enabled else "OFF"
-        self.safe_write(f':CHAN2:DISP {ch2_disp}')
-        if state.ch2_enabled:
-            self.safe_write(f':CHAN2:OFFS {state.ch2_offset}')
-
     def autoscale(self):
         self.safe_write(':AUT')
-        time.sleep(2.0)
+        time.sleep(1.5)  # Минимальное время на аппаратную реакцию реле
 
     def run(self):
         self.safe_write(':RUN')
 
     def stop(self):
         self.safe_write(':STOP')
-
-    def save_state_json(self, folder_path: str, step: int):
-        if step == -1:
-            settings_folder = os.path.join(folder_path, "OscilloscopeSettings")
-            filename = f"osc_settings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        else:
-            settings_folder = os.path.join(folder_path, "OscilloscopeSettings", "ByStep")
-            filename = f"osc_state_step_{step:03d}.json"
-
-        os.makedirs(settings_folder, exist_ok=True)
-
-        try: vscale1 = float(self.safe_query(':CHAN1:SCAL?'))
-        except Exception: vscale1 = 1.0
-        try: vscale2 = float(self.safe_query(':CHAN2:SCAL?'))
-        except Exception: vscale2 = 1.0
-        try: timebase = float(self.safe_query(':TIM:SCAL?'))
-        except Exception: timebase = 1e-6
-        try: ch1_enabled = (self.safe_query(':CHAN1:DISP?') == '1')
-        except Exception: ch1_enabled = True
-        try: ch2_enabled = (self.safe_query(':CHAN2:DISP?') == '1')
-        except Exception: ch2_enabled = True
-        try: ch1_offset = float(self.safe_query(':CHAN1:OFFS?'))
-        except Exception: ch1_offset = 0.0
-        try: ch2_offset = float(self.safe_query(':CHAN2:OFFS?'))
-        except Exception: ch2_offset = 0.0
-
-        try: ch1_imp = self.safe_query(':CHAN1:IMP?')
-        except Exception: ch1_imp = "UNKNOWN"
-        try: ch2_imp = self.safe_query(':CHAN2:IMP?')
-        except Exception: ch2_imp = "UNKNOWN"
-        try: trig_lev = float(self.safe_query(':TRIG:EDGE:LEV?'))
-        except Exception: trig_lev = 0.0
-        try: trig_swe = self.safe_query(':TRIG:SWE?')
-        except Exception: trig_swe = "UNKNOWN"
-        try: trig_mod = self.safe_query(':TRIG:MODE?')
-        except Exception: trig_mod = "UNKNOWN"
-        try: trig_src = self.safe_query(':TRIG:EDGE:SOUR?')
-        except Exception: trig_src = "UNKNOWN"
-        try: trig_slp = self.safe_query(':TRIG:EDGE:SLOP?')
-        except Exception: trig_slp = "UNKNOWN"
-
-        settings = {
-            "step": step if step >= 0 else None,
-            "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
-            "channel1": {
-                "enabled": ch1_enabled,
-                "scale_vdiv": vscale1,
-                "offset_v": ch1_offset,
-                "impedance": ch1_imp
-            },
-            "channel2": {
-                "enabled": ch2_enabled,
-                "scale_vdiv": vscale2,
-                "offset_v": ch2_offset,
-                "impedance": ch2_imp
-            },
-            "timebase_sdiv": timebase,
-            "trigger": {
-                "level_v": trig_lev,
-                "sweep_mode": trig_swe,
-                "type": trig_mod,
-                "source": trig_src,
-                "slope": trig_slp
-            }
-        }
-
-        json_file = os.path.join(settings_folder, filename)
-        with open(json_file, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, indent=4, ensure_ascii=False)
-
-    def load_state_from_json(self, json_file: str):
-        with open(json_file, 'r', encoding='utf-8') as f:
-            settings = json.load(f)
-
-        if "channel1" in settings:
-            ch1 = settings["channel1"]
-            if "scale_vdiv" in ch1: self.safe_write(f':CHAN1:SCAL {ch1["scale_vdiv"]}')
-            if "enabled" in ch1: self.safe_write(f':CHAN1:DISP {"ON" if ch1["enabled"] else "OFF"}')
-            if "offset_v" in ch1: self.safe_write(f':CHAN1:OFFS {ch1["offset_v"]}')
-
-        if "channel2" in settings:
-            ch2 = settings["channel2"]
-            if "scale_vdiv" in ch2: self.safe_write(f':CHAN2:SCAL {ch2["scale_vdiv"]}')
-            if "enabled" in ch2: self.safe_write(f':CHAN2:DISP {"ON" if ch2["enabled"] else "OFF"}')
-            if "offset_v" in ch2: self.safe_write(f':CHAN2:OFFS {ch2["offset_v"]}')
-
-        if "timebase_sdiv" in settings:
-            self.safe_write(f':TIM:SCAL {settings["timebase_sdiv"]}')
-
-        if "trigger" in settings:
-            trig = settings["trigger"]
-            if "level_v" in trig: self.safe_write(f':TRIG:EDGE:LEV {trig["level_v"]}')
-            if "sweep_mode" in trig: self.safe_write(f':TRIG:SWE {trig["sweep_mode"]}')
-
-    def get_screenshot(self, filepath: str):
-        try:
-            self.safe_write(':SAVE:IMAGE:FORMAT PNG')
-            time.sleep(0.4)
-            self.safe_write(':DISP:DATA?')
-            raw_data = self.dev.read_raw()
-            if raw_data.startswith(b'#'):
-                n_len = int(chr(raw_data[1]))
-                img_data = raw_data[2 + n_len:]
-            else:
-                img_data = raw_data
-
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            with open(filepath, 'wb') as f:
-                f.write(img_data)
-        except Exception as e:
-            raise RuntimeError(f"Ошибка сохранения скриншота осциллографа: {str(e)}")
 
     def save_channel_data(self, channel: int, step: int, voltage: float,
                           waveforms_folder: str, measurements_folder: str,
@@ -337,10 +207,8 @@ class RigolOscilloscopeDriver:
         base_name = f"CH{channel}_{voltage_str}V_step{step:03d}"
 
         self.safe_write(f':CHAN{channel}:DISP ON')
-        self.run()
-        time.sleep(0.4)
+        # Быстрый снимок: стоп для считывания зафиксированного кадра
         self.stop()
-        time.sleep(0.2)
 
         self.safe_write(f':WAV:SOUR CHAN{channel}')
         self.safe_write(':WAV:MODE RAW')
@@ -358,7 +226,7 @@ class RigolOscilloscopeDriver:
         self.safe_write(f":WAV:STOP {points}")
 
         old_timeout = self.dev.timeout
-        self.dev.timeout = 15000
+        self.dev.timeout = 10000
         try:
             self.dev.write(':WAV:DATA?')
             raw_data = self.dev.read_raw()
@@ -400,8 +268,8 @@ class RigolOscilloscopeDriver:
             f_path = os.path.join(measurements_folder, f"{metric}_CH{channel}.csv")
             row = {'step': step, 'voltage': voltage, metric: measurements[metric], 'time': measurement_time}
             df = pd.DataFrame([row])
-            mode = 'a' if os.path.exists(f_path) else 'w'
-            df.to_csv(f_path, mode=mode, header=not os.path.exists(f_path), index=False, sep=';', decimal=',')
+            m = 'a' if os.path.exists(f_path) else 'w'
+            df.to_csv(f_path, mode=m, header=not os.path.exists(f_path), index=False, sep=';', decimal=',')
 
         if screenshots_folder:
             screenshot_path = os.path.join(screenshots_folder, f"{base_name}_screenshot.png")
@@ -413,10 +281,8 @@ class RigolOscilloscopeDriver:
         return measurements
 
     def close(self):
-        try:
-            self.dev.close()
-        except Exception:
-            pass
+        try: self.dev.close()
+        except Exception: pass
 
 
 # ==============================================================================
@@ -616,19 +482,14 @@ class SpectrumAnalyzerDriver:
 class PowerMeterDriver:
     def __init__(self, resource):
         self.dev = resource
-        try:
-            self.dev.baud_rate = 115200
-            self.dev.read_termination = '\r\n'
-            self.dev.write_termination = '\r\n'
-            self.dev.timeout = 2000
-        except Exception as e:
-            raise RuntimeError(f"Сбой конфигурации порта PM100USB: {str(e)}")
+        self.dev.baud_rate = 115200
+        self.dev.read_termination = '\r\n'
+        self.dev.write_termination = '\r\n'
+        self.dev.timeout = 2000
 
     def measure_power(self) -> Dict[str, Any]:
         try:
-            time.sleep(0.3)
             self.dev.write("*POW_S?")
-            time.sleep(0.1)
             resp = self.dev.read().strip()
 
             power_w = 0.0
@@ -660,29 +521,50 @@ class PowerMeterDriver:
                 else:
                     raise RuntimeError(f"Неизвестный ответ PM100USB: {resp}")
 
-            return {
-                'raw_unit': raw_unit,
-                'power_w': power_w,
-                'power_dbm': power_dbm
-            }
+            return {'raw_unit': raw_unit, 'power_w': power_w, 'power_dbm': power_dbm}
         except Exception as e:
             raise RuntimeError(f"Ошибка чтения PM100USB: {str(e)}")
 
     def close(self):
-        try:
-            self.dev.close()
-        except Exception:
-            pass
-
+        try: self.dev.close()
+        except Exception: pass
 
 # ==============================================================================
 # АППАРАТНЫЙ ДРАЙВЕР ОПТИЧЕСКОГО АНАЛИЗАТОРА (LSA)
 # ==============================================================================
 class LSADriver:
-    def __init__(self, host: str = "127.0.0.1", port: int = 5006, timeout: float = 2.0):
+    def __init__(self, host: str = "127.0.0.1", port: int = 5006, timeout: float = 1.0):
         self.host = host
         self.port = port
         self.timeout = timeout
+
+    @staticmethod
+    def is_process_running(process_name: str = "LSA.exe") -> bool:
+        """Проверяет через tasklist Windows, запущен ли LSA.exe"""
+        try:
+            output = subprocess.check_output('tasklist', shell=True).decode('cp866', errors='ignore')
+            return process_name.lower() in output.lower()
+        except Exception:
+            return False
+
+    def ping_bridge(self) -> bool:
+        """Проверка связи с UDP мостом"""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(0.5)
+                cmd = {"action": "ping"}
+                sock.sendto(json.dumps(cmd).encode('utf-8'), (self.host, self.port))
+                resp_data, _ = sock.recvfrom(1024)
+                return True
+        except Exception:
+            return False
+
+    def check_ready(self) -> Tuple[bool, str]:
+        if not self.is_process_running():
+            return False, "Программа LSA.exe не запущена в Windows"
+        if not self.ping_bridge():
+            return False, "UDP-мост (порт 5006) не отвечает"
+        return True, "Готов к измерениям"
 
     def save_smx_and_get_peak(self, smx_path: str) -> float:
         abs_smx_path = os.path.abspath(smx_path)
@@ -695,12 +577,9 @@ class LSADriver:
                 resp = json.loads(resp_data.decode('utf-8'))
 
             if not os.path.exists(abs_smx_path):
-                err = resp.get('error', 'Файл SMX не создан')
-                raise RuntimeError(f"Мост вернул ошибку: {err}")
+                raise RuntimeError(f"Файл SMX не был создан: {resp.get('error')}")
 
             return float(resp.get("peak", 0.0))
-        except socket.timeout:
-            raise RuntimeError("Таймаут: 32-битный мост LSA (порт 5006) не отвечает.")
         except Exception as e:
             raise RuntimeError(f"Сбой связи с мостом LSA: {str(e)}")
 
@@ -719,7 +598,7 @@ class LSADriver:
             x_step = get_tag_value("100061")
 
             if "10003" not in lines:
-                raise RuntimeError(f"Тег '10003' не найден в {os.path.basename(smx_path)}")
+                raise RuntimeError(f"Тег 10003 не найден в {os.path.basename(smx_path)}")
 
             idx_10003 = lines.index("10003")
             raw_vals = []
@@ -732,24 +611,19 @@ class LSADriver:
                     break
 
             y_raw = np.array(raw_vals)
-            num_points = len(y_raw)
-            if num_points == 0:
+            if len(y_raw) == 0:
                 raise RuntimeError("Пустой спектр интенсивности в SMX.")
 
             if x_start is None: x_start = 1614.7115
             if x_step is None: x_step = -0.0630067
 
-            x_raw = x_start + np.arange(num_points) * x_step
-            x = x_raw[::-1]
-            y = y_raw[::-1]
-
-            df = pd.DataFrame({"Wavelength_nm": x, "Intensity": y})
+            x_raw = x_start + np.arange(len(y_raw)) * x_step
+            df = pd.DataFrame({"Wavelength_nm": x_raw[::-1], "Intensity": y_raw[::-1]})
             os.makedirs(os.path.dirname(csv_path), exist_ok=True)
             df.to_csv(csv_path, index=False, sep=";", decimal=',')
             return csv_path
         except Exception as e:
             raise RuntimeError(f"Ошибка конвертации SMX->CSV: {str(e)}")
-
 
 # ==============================================================================
 # UI ПАНЕЛИ
@@ -1074,6 +948,8 @@ class ExperimentTask:
     use_pm: bool = True
     use_lsa: bool = True
 
+    auto_timing: bool = False  # Флаг компенсации overhead
+
     osc_ch1_enabled: bool = True
     osc_ch2_enabled: bool = True
     osc_auto: bool = False
@@ -1092,6 +968,7 @@ class ExperimentPanel(QWidget):
     def init_ui(self):
         layout = QVBoxLayout(self)
 
+        # Выбор приборов в цикле (по умолчанию все включены)
         dev_group = QGroupBox("Приборы в цикле")
         dev_layout = QHBoxLayout(dev_group)
         self.check_gen = QCheckBox("Генератор")
@@ -1112,6 +989,19 @@ class ExperimentPanel(QWidget):
         dev_layout.addWidget(self.check_lsa)
         layout.addWidget(dev_group)
 
+        # Режим управления паузой
+        timing_group = QGroupBox("Управление синхронизацией времени")
+        timing_layout = QHBoxLayout(timing_group)
+        timing_layout.addWidget(QLabel("Режим паузы между шагами:"))
+        self.combo_timing_mode = QComboBox()
+        self.combo_timing_mode.addItems([
+            "Фиксированная пауза (из поля)",
+            "Автоподстройка периода (Тестовый прогон + компенсация overhead)"
+        ])
+        timing_layout.addWidget(self.combo_timing_mode)
+        layout.addWidget(timing_group)
+
+        # Каталог
         folder_group = QGroupBox("Каталог сохранения")
         f_layout = QHBoxLayout(folder_group)
         self.path_input = QLineEdit(str(Path.home() / 'Rigol_Measurements'))
@@ -1121,6 +1011,7 @@ class ExperimentPanel(QWidget):
         f_layout.addWidget(self.btn_browse)
         layout.addWidget(folder_group)
 
+        # Параметры развертки
         mode_group = QGroupBox("Параметры развёртки")
         m_layout = QVBoxLayout(mode_group)
 
@@ -1131,17 +1022,18 @@ class ExperimentPanel(QWidget):
         self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
         top_m.addWidget(self.mode_combo)
 
-        top_m.addWidget(QLabel("Целевой канал генератора:"))
+        top_m.addWidget(QLabel("Целевой канал:"))
         self.target_ch_combo = QComboBox()
         self.target_ch_combo.addItems(["Канал 1", "Канал 2", "Оба канала"])
         top_m.addWidget(self.target_ch_combo)
 
-        top_m.addWidget(QLabel("Пауза (с):"))
+        top_m.addWidget(QLabel("Период/Пауза (с):"))
         self.pause_input = QLineEdit("2.0")
         self.pause_input.setFixedWidth(50)
         top_m.addWidget(self.pause_input)
         m_layout.addLayout(top_m)
 
+        # DC
         self.dc_box = QWidget()
         dc_l = QHBoxLayout(self.dc_box)
         dc_l.addWidget(QLabel("Старт (В):"))
@@ -1155,12 +1047,13 @@ class ExperimentPanel(QWidget):
         dc_l.addWidget(self.dc_steps)
         m_layout.addWidget(self.dc_box)
 
+        # SIN
         self.sin_box = QWidget()
         sin_l = QGridLayout(self.sin_box)
-        sin_l.addWidget(QLabel("Старт частота (Гц):"), 0, 0)
+        sin_l.addWidget(QLabel("Старт Freq (Гц):"), 0, 0)
         self.sin_f_start = QLineEdit("1000000")
         sin_l.addWidget(self.sin_f_start, 0, 1)
-        sin_l.addWidget(QLabel("Шаг частоты:"), 0, 2)
+        sin_l.addWidget(QLabel("Шаг Freq:"), 0, 2)
         self.sin_f_step = QLineEdit("100000")
         sin_l.addWidget(self.sin_f_step, 0, 3)
 
@@ -1184,12 +1077,13 @@ class ExperimentPanel(QWidget):
         m_layout.addWidget(self.sin_box)
         self.sin_box.setVisible(False)
 
+        # PULSE
         self.pulse_box = QWidget()
         pulse_l = QGridLayout(self.pulse_box)
-        pulse_l.addWidget(QLabel("Старт частота (Гц):"), 0, 0)
+        pulse_l.addWidget(QLabel("Старт Freq (Гц):"), 0, 0)
         self.pulse_f_start = QLineEdit("1000000")
         pulse_l.addWidget(self.pulse_f_start, 0, 1)
-        pulse_l.addWidget(QLabel("Шаг частоты:"), 0, 2)
+        pulse_l.addWidget(QLabel("Шаг Freq:"), 0, 2)
         self.pulse_f_step = QLineEdit("100000")
         pulse_l.addWidget(self.pulse_f_step, 0, 3)
 
@@ -1250,8 +1144,7 @@ class ExperimentPanel(QWidget):
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Каталог сохранения")
-        if folder:
-            self.path_input.setText(folder)
+        if folder: self.path_input.setText(folder)
 
     def log(self, text: str):
         self.log_window.append(text)
@@ -1259,7 +1152,7 @@ class ExperimentPanel(QWidget):
     def collect_task_and_emit(self):
         folder = self.path_input.text().strip()
         if not folder:
-            QMessageBox.warning(self, "Ошибка", "Укажите каталог для сохранения!")
+            QMessageBox.warning(self, "Ошибка", "Укажите каталог сохранения!")
             return
 
         mode = self.mode_combo.currentText()
@@ -1284,7 +1177,7 @@ class ExperimentPanel(QWidget):
                 w_s, w_st = float(self.pulse_w_start.text()), float(self.pulse_w_step.text())
                 vals = [(f_s + i * f_st, h_s + i * h_st, l_s + i * l_st, w_s + i * w_st) for i in range(n)]
         except ValueError:
-            QMessageBox.warning(self, "Ошибка", "Проверьте корректность введённых числовых параметров!")
+            QMessageBox.warning(self, "Ошибка", "Проверьте введенные параметры!")
             return
 
         task = ExperimentTask(
@@ -1297,7 +1190,8 @@ class ExperimentPanel(QWidget):
             use_osc=self.check_osc.isChecked(),
             use_sa=self.check_sa.isChecked(),
             use_pm=self.check_pm.isChecked(),
-            use_lsa=self.check_lsa.isChecked()
+            use_lsa=self.check_lsa.isChecked(),
+            auto_timing=(self.combo_timing_mode.currentIndex() == 1)
         )
 
         self.btn_start.setEnabled(False)
@@ -1309,7 +1203,6 @@ class ExperimentPanel(QWidget):
     def reset_controls(self):
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
-
 
 # ==============================================================================
 # ПОТОК ВЫПОЛНЕНИЯ ЭКСПЕРИМЕНТА
@@ -1338,23 +1231,17 @@ class ExperimentThread(QThread):
         if self.task.use_gen:
             self.folders['gen'] = os.path.join(self.exp_folder, "Generator")
             os.makedirs(self.folders['gen'], exist_ok=True)
-
         if self.task.use_osc:
             self.folders['osc_wave'] = os.path.join(self.exp_folder, "Oscilloscope", "Waveforms")
             self.folders['osc_meas'] = os.path.join(self.exp_folder, "Oscilloscope", "Measurements")
             self.folders['osc_screen'] = os.path.join(self.exp_folder, "Oscilloscope", "Screenshots")
-            os.makedirs(self.folders['osc_wave'], exist_ok=True)
-            os.makedirs(self.folders['osc_meas'], exist_ok=True)
-            os.makedirs(self.folders['osc_screen'], exist_ok=True)
-
+            for f in self.folders.values(): os.makedirs(f, exist_ok=True)
         if self.task.use_sa:
             self.folders['sa_traces'] = os.path.join(self.exp_folder, "SpectrumAnalyzer_DSA", "Traces")
             os.makedirs(self.folders['sa_traces'], exist_ok=True)
-
         if self.task.use_pm:
             self.folders['pm'] = os.path.join(self.exp_folder, "PowerMeter")
             os.makedirs(self.folders['pm'], exist_ok=True)
-
         if self.task.use_lsa:
             self.folders['lsa_smx'] = os.path.join(self.exp_folder, "OpticalAnalyzer_LSA", "SMX_Raw")
             self.folders['lsa_csv'] = os.path.join(self.exp_folder, "OpticalAnalyzer_LSA", "CSV_Export")
@@ -1367,52 +1254,123 @@ class ExperimentThread(QThread):
         if self.task.use_pm and 'pm' in self.folders:
             n = 1
             while True:
-                path = os.path.join(self.folders['pm'], f"power_log_exp{n:03d}.csv")
-                if not os.path.exists(path):
-                    self.pm_log_file = path
-                    break
+                p = os.path.join(self.folders['pm'], f"power_log_exp{n:03d}.csv")
+                if not os.path.exists(p):
+                    self.pm_log_file = p; break
                 n += 1
-
         if self.task.use_lsa and 'lsa_csv' in self.folders:
             n = 1
             while True:
-                path = os.path.join(os.path.dirname(self.folders['lsa_csv']), f"lsa_log_exp{n:03d}.csv")
-                if not os.path.exists(path):
-                    self.lsa_log_file = path
-                    break
+                p = os.path.join(os.path.dirname(self.folders['lsa_csv']), f"lsa_log_exp{n:03d}.csv")
+                if not os.path.exists(p):
+                    self.lsa_log_file = p; break
                 n += 1
+
+    def _execute_measurement_step(self, step_num: int, cur_volt: float, cur_freq: float, is_test_run: bool = False):
+        """Единая точка опроса только тех приборов, которые отмечены галочками."""
+        gen: Optional[RigolGeneratorDriver] = self.drivers.get('gen')
+        osc: Optional[RigolOscilloscopeDriver] = self.drivers.get('osc')
+        sa: Optional[SpectrumAnalyzerDriver] = self.drivers.get('sa')
+        pm: Optional[PowerMeterDriver] = self.drivers.get('pm')
+        lsa: Optional[LSADriver] = self.drivers.get('lsa')
+
+        # 1. Измеритель мощности
+        if self.task.use_pm and pm and self.pm_log_file and not is_test_run:
+            try:
+                pm_data = pm.measure_power()
+                current_ma = cur_volt * 150.0
+                df_pm = pd.DataFrame([{
+                    'Step': step_num, 'Voltage_V': cur_volt, 'Current_mA': current_ma,
+                    'Power_W': pm_data['power_w'], 'Power_dBm': pm_data['power_dbm'],
+                    'PM_Raw_Unit': pm_data['raw_unit'],
+                    'Time': datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                }])
+                m = 'a' if os.path.exists(self.pm_log_file) else 'w'
+                df_pm.to_csv(self.pm_log_file, mode=m, header=not os.path.exists(self.pm_log_file),
+                             index=False, sep=';', decimal=',')
+            except Exception as e:
+                self.log_msg.emit(f"Сбой PM: {e}")
+
+        # 2. LSA
+        if self.task.use_lsa and lsa and self.lsa_log_file and not is_test_run:
+            try:
+                v_str = f"{cur_volt:.2f}".replace('.', '_')
+                smx_path = os.path.join(self.folders['lsa_smx'], f"LSA_step{step_num:03d}_{v_str}V.smx")
+                csv_path = os.path.join(self.folders['lsa_csv'], f"LSA_step{step_num:03d}_{v_str}V.csv")
+                peak_nm = lsa.save_smx_and_get_peak(smx_path)
+                lsa.convert_smx_to_csv(smx_path, csv_path)
+
+                df_lsa = pd.DataFrame([{
+                    'Step': step_num, 'Voltage_V': cur_volt, 'LSA_Peak_nm': peak_nm,
+                    'Time': datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                }])
+                m = 'a' if os.path.exists(self.lsa_log_file) else 'w'
+                df_lsa.to_csv(self.lsa_log_file, mode=m, header=not os.path.exists(self.lsa_log_file),
+                              index=False, sep=';', decimal=',')
+            except Exception as e:
+                self.log_msg.emit(f"Сбой LSA: {e}")
+
+        # 3. Осциллограф
+        if self.task.use_osc and osc:
+            try:
+                if not is_test_run:
+                    if self.task.osc_ch1_enabled:
+                        osc.save_channel_data(1, step_num, cur_volt,
+                                              self.folders['osc_wave'], self.folders['osc_meas'],
+                                              self.folders['osc_screen'])
+                    if self.task.osc_ch2_enabled:
+                        osc.save_channel_data(2, step_num, cur_volt,
+                                              self.folders['osc_wave'], self.folders['osc_meas'],
+                                              self.folders['osc_screen'])
+                osc.run()
+            except Exception as e:
+                self.log_msg.emit(f"Сбой OSC: {e}")
+
+        # 4. Спектроанализатор
+        if self.task.use_sa and sa:
+            try:
+                if not is_test_run:
+                    sa.save_trace_csv(self.folders['sa_traces'], step_num, cur_volt, cur_freq)
+            except Exception as e:
+                self.log_msg.emit(f"Сбой DSA: {e}")
 
     def run(self):
         try:
-            self.log_msg.emit("Подготовка окружения эксперимента...")
+            self.log_msg.emit("Подготовка эксперимента...")
             self._setup_folders()
             self._init_log_files()
 
             gen: Optional[RigolGeneratorDriver] = self.drivers.get('gen')
-            osc: Optional[RigolOscilloscopeDriver] = self.drivers.get('osc')
-            sa: Optional[SpectrumAnalyzerDriver] = self.drivers.get('sa')
-            pm: Optional[PowerMeterDriver] = self.drivers.get('pm')
-            lsa: Optional[LSADriver] = self.drivers.get('lsa')
-
-            # Сохранение начального профиля при ручном режиме (1 раз)
-            if self.task.use_osc and osc and not self.task.osc_auto:
-                osc.save_state_json(self.exp_folder, -1)
-            if self.task.use_sa and sa and not self.task.sa_auto:
-                sa.save_state_json(self.exp_folder, -1, mode_name="manual")
 
             if self.task.use_gen and gen:
-                if self.task.target_ch in ["Канал 1", "Оба канала"]:
-                    gen.set_output(1, True)
-                if self.task.target_ch in ["Канал 2", "Оба канала"]:
-                    gen.set_output(2, True)
+                if self.task.target_ch in ["Канал 1", "Оба канала"]: gen.set_output(1, True)
+                if self.task.target_ch in ["Канал 2", "Оба канала"]: gen.set_output(2, True)
+
+            # ==================================================================
+            # ТЕСТОВЫЙ КАЛИБРОВОЧНЫЙ ШАГ (ПРОГРЕВ И ЗАМЕР OVERHEAD)
+            # ==================================================================
+            overhead_time = 0.0
+            if self.task.auto_timing:
+                self.log_msg.emit("Запуск тестового забега для калибровки задержек аппаратуры...")
+                t_cal_start = time.perf_counter()
+                first_val = self.task.values[0]
+                c_volt = float(first_val) if self.task.mode == "DC" else float(first_val[1])
+                c_freq = self.task.sa_gen_freq if self.task.mode == "DC" else float(first_val[0])
+                self._execute_measurement_step(0, c_volt, c_freq, is_test_run=True)
+                overhead_time = time.perf_counter() - t_cal_start
+                self.log_msg.emit(f"Аппаратный overhead приборов: {overhead_time:.3f} с")
 
             num_steps = len(self.task.values)
 
+            # ==================================================================
+            # ОСНОВНОЙ ЦИКЛ
+            # ==================================================================
             for i in range(num_steps):
                 if not self._is_running:
-                    self.log_msg.emit("Эксперимент остановлен пользователем.")
+                    self.log_msg.emit("Остановлено пользователем.")
                     break
 
+                step_start_time = time.perf_counter()
                 step_num = i + 1
                 cur_val = self.task.values[i]
 
@@ -1423,20 +1381,18 @@ class ExperimentThread(QThread):
                     cur_freq = float(cur_val[0])
                     cur_volt = float(cur_val[1])
 
-                self.log_msg.emit(f"Шаг {step_num}/{num_steps}: Напряжение={cur_volt:.3f} В")
+                self.log_msg.emit(f"Шаг {step_num}/{num_steps}: U={cur_volt:.3f} В")
 
-                # 1. Генератор
+                # 1. Подача сигнала с генератора (только если стоит галочка)
                 if self.task.use_gen and gen:
                     try:
                         if self.task.mode == "DC":
                             if self.task.target_ch in ["Канал 1", "Оба канала"]:
                                 gen.safe_write(':SOUR1:FUNC DC')
                                 gen.safe_write(f':SOUR1:VOLT:OFFS {cur_volt}')
-                                gen.safe_write(':SOUR1:VOLT 0')
                             if self.task.target_ch in ["Канал 2", "Оба канала"]:
                                 gen.safe_write(':SOUR2:FUNC DC')
                                 gen.safe_write(f':SOUR2:VOLT:OFFS {cur_volt}')
-                                gen.safe_write(':SOUR2:VOLT 0')
                         elif self.task.mode == "SIN параметры":
                             f, h, l = cur_val
                             if self.task.target_ch in ["Канал 1", "Оба канала"]:
@@ -1468,93 +1424,21 @@ class ExperimentThread(QThread):
                     except Exception as e:
                         self.log_msg.emit(f"Сбой генератора: {e}")
 
-                # 2. Автонастройка спектроанализатора под сигнал
-                if self.task.use_sa and sa and self.task.sa_auto:
-                    try:
-                        span = max(cur_freq * 0.1, 100000.0)
-                        rbw = max(span * 0.01, 1000.0)
-                        sa.apply_settings(center_freq=cur_freq, span=span, rbw=rbw, vbw=rbw)
-                        sa.save_state_json(self.exp_folder, step_num, mode_name="auto")
-                    except Exception as e:
-                        self.log_msg.emit(f"Сбой автонастройки DSA: {e}")
+                # 2. Пауза воздействия (чистая пауза перед замером)
+                if not self.task.auto_timing:
+                    time.sleep(self.task.pause_s)
 
-                # 3. Автонастройка осциллографа под сигнал
-                if self.task.use_osc and osc and self.task.osc_auto:
-                    try:
-                        osc.autoscale()
-                        osc.save_state_json(self.exp_folder, step_num)
-                    except Exception as e:
-                        self.log_msg.emit(f"Сбой автонастройки осциллографа: {e}")
+                # 3. Синхронное снятие данных
+                self._execute_measurement_step(step_num, cur_volt, cur_freq, is_test_run=False)
 
-                time.sleep(self.task.pause_s)
-
-                # 4. Измеритель мощности
-                if self.task.use_pm and pm and self.pm_log_file:
-                    try:
-                        pm_data = pm.measure_power()
-                        current_ma = cur_volt * 150.0
-                        df_pm = pd.DataFrame([{
-                            'Step': step_num,
-                            'Voltage_V': cur_volt,
-                            'Current_mA': current_ma,
-                            'Power_W': pm_data['power_w'],
-                            'Power_dBm': pm_data['power_dbm'],
-                            'PM_Raw_Unit': pm_data['raw_unit'],
-                            'Time': datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                        }])
-                        m = 'a' if os.path.exists(self.pm_log_file) else 'w'
-                        df_pm.to_csv(self.pm_log_file, mode=m, header=not os.path.exists(self.pm_log_file),
-                                     index=False, sep=';', decimal=',')
-                        self.log_msg.emit(f"  PM: {pm_data['power_w'] * 1e3:.2f} мВт ({pm_data['power_dbm']:.2f} дБм)")
-                    except Exception as e:
-                        self.log_msg.emit(f"Сбой PM: {e}")
-
-                # 5. LSA
-                if self.task.use_lsa and lsa and self.lsa_log_file:
-                    try:
-                        v_str = f"{cur_volt:.2f}".replace('.', '_')
-                        smx_path = os.path.join(self.folders['lsa_smx'], f"LSA_step{step_num:03d}_{v_str}V.smx")
-                        csv_path = os.path.join(self.folders['lsa_csv'], f"LSA_step{step_num:03d}_{v_str}V.csv")
-                        peak_nm = lsa.save_smx_and_get_peak(smx_path)
-                        lsa.convert_smx_to_csv(smx_path, csv_path)
-
-                        df_lsa = pd.DataFrame([{
-                            'Step': step_num,
-                            'Voltage_V': cur_volt,
-                            'LSA_Peak_nm': peak_nm,
-                            'Time': datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                        }])
-                        m = 'a' if os.path.exists(self.lsa_log_file) else 'w'
-                        df_lsa.to_csv(self.lsa_log_file, mode=mode, header=not os.path.exists(self.lsa_log_file),
-                                      index=False, sep=';', decimal=',')
-                        self.log_msg.emit(f"  LSA: Пик={peak_nm:.4f} нм сохранен")
-                    except Exception as e:
-                        self.log_msg.emit(f"Сбой LSA: {e}")
-
-                # 6. Осциллограф (сбор форм волн)
-                if self.task.use_osc and osc:
-                    try:
-                        if self.task.osc_ch1_enabled:
-                            m1 = osc.save_channel_data(1, step_num, cur_volt,
-                                                       self.folders['osc_wave'], self.folders['osc_meas'],
-                                                       self.folders['osc_screen'])
-                            self.log_msg.emit(f"  OSC CH1: VRMS={m1['vrms']:.3f} В")
-                        if self.task.osc_ch2_enabled:
-                            m2 = osc.save_channel_data(2, step_num, cur_volt,
-                                                       self.folders['osc_wave'], self.folders['osc_meas'],
-                                                       self.folders['osc_screen'])
-                            self.log_msg.emit(f"  OSC CH2: VRMS={m2['vrms']:.3f} В")
-                        osc.run()
-                    except Exception as e:
-                        self.log_msg.emit(f"Сбой OSC: {e}")
-
-                # 7. Спектроанализатор (сбор трасс)
-                if self.task.use_sa and sa:
-                    try:
-                        sa.save_trace_csv(self.folders['sa_traces'], step_num, cur_volt, cur_freq)
-                        self.log_msg.emit("  DSA: Трасса сохранена")
-                    except Exception as e:
-                        self.log_msg.emit(f"Сбой DSA: {e}")
+                # 4. Если включена автоподстройка: компенсируем overhead
+                if self.task.auto_timing:
+                    elapsed = time.perf_counter() - step_start_time
+                    remaining_pause = self.task.pause_s - elapsed
+                    if remaining_pause > 0:
+                        time.sleep(remaining_pause)
+                    else:
+                        self.log_msg.emit(f"  Внимание: overhead приборов ({elapsed:.2f} с) превысил заданный период ({self.task.pause_s} с)")
 
                 self.progress.emit(step_num)
 
@@ -1569,32 +1453,35 @@ class ExperimentThread(QThread):
                     try:
                         gen_drv.set_output(1, False)
                         gen_drv.set_output(2, False)
-                        self.log_msg.emit("Безопасность: выходы генератора переведены в состояние ВЫКЛ.")
+                        self.log_msg.emit("Генератор: выходы отключены (безопасность).")
                     except Exception as e_gen:
-                        self.log_msg.emit(f"Критический сбой отключения генератора: {e_gen}")
-
+                        self.log_msg.emit(f"Сбой отключения генератора: {e_gen}")
             self.finished_experiment.emit()
 
-
 # ==============================================================================
-# БЕЗОПАСНЫЙ ПОТОК ОБНАРУЖЕНИЯ ПРИБОРОВ (БЕЗ СБРОСА)
+# ПОТОК ОБНАРУЖЕНИЯ ПРИБОРОВ
 # ==============================================================================
 class DeviceScanThread(QThread):
     device_found = pyqtSignal(str, str, object)
     error_occurred = pyqtSignal(str)
     finished_scan = pyqtSignal()
 
-    def __init__(self, rm):
+    def __init__(self, rm, lsa_driver: LSADriver):
         super().__init__()
         self.rm = rm
+        self.lsa_driver = lsa_driver
 
     def run(self):
         try:
-            resources = self.rm.list_resources()
-            if not resources:
-                self.error_occurred.emit("Устройства VISA не обнаружены.")
-                return
+            # 1. Проверяем статус LSA.exe и UDP моста
+            is_lsa_ready, lsa_msg = self.lsa_driver.check_ready()
+            if is_lsa_ready:
+                self.device_found.emit("Оптический анализатор (LSA.exe активен)", "UDP:5006", self.lsa_driver)
+            else:
+                self.device_found.emit(f"Оптический анализатор (Недоступен: {lsa_msg})", "UDP:5006", None)
 
+            # 2. Сканирование VISA приборов
+            resources = self.rm.list_resources()
             for res in resources:
                 if 'ASRL10' in res or 'ASRL11' in res:
                     continue
@@ -1605,14 +1492,11 @@ class DeviceScanThread(QThread):
 
                 try:
                     raw_dev = self.rm.open_resource(res)
-                    raw_dev.timeout = 3000
-                    
-                    # Безопасная проверка модели без отправки сбросов или команд развертки
+                    raw_dev.timeout = 2000
+
                     idn = ""
-                    try:
-                        idn = raw_dev.query('*IDN?').strip()
-                    except Exception:
-                        pass
+                    try: idn = raw_dev.query('*IDN?').strip()
+                    except Exception: pass
 
                     if 'DG' in res_u or 'DG' in idn:
                         name = f"Генератор ({idn.split(',')[1] if ',' in idn else 'Rigol DG'})"
@@ -1636,7 +1520,6 @@ class DeviceScanThread(QThread):
             self.error_occurred.emit(f"Ошибка сканирования: {e}")
         finally:
             self.finished_scan.emit()
-
 
 # ==============================================================================
 # ГЛАВНОЕ ОКНО ПРИЛОЖЕНИЯ
@@ -1856,7 +1739,7 @@ class RigolControlApp(QMainWindow):
         self.close_all_drivers()
         time.sleep(0.2)
 
-        self.scan_thread = DeviceScanThread(self.rm)
+        self.scan_thread = DeviceScanThread(self.rm, self.lsa_driver)
         self.scan_thread.device_found.connect(self.on_device_found)
         self.scan_thread.error_occurred.connect(lambda err: self.list_devices.addItem(f"Ошибка: {err}"))
         self.scan_thread.finished_scan.connect(self.on_scan_finished)
