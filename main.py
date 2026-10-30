@@ -1040,14 +1040,14 @@ class ExperimentPanel(QWidget):
         super().__init__()
         self.init_ui()
 
-    def _create_field(self, default_val: str, width: int = 100) -> QLineEdit:
-        """Вспомогательный метод для создания строго фиксированного поля ввода."""
+    def _create_field(self, default_val: str, min_width: int = 120) -> QLineEdit:
         edit = QLineEdit(default_val)
-        edit.setFixedWidth(width)
+        edit.setMinimumWidth(min_width)
         return edit
 
     def init_ui(self):
         layout = QVBoxLayout(self)
+        layout.setSizeConstraint(QVBoxLayout.SetMinimumSize)
 
         # 1. Приборы в цикле
         dev_group = QGroupBox("Приборы в цикле")
@@ -1309,6 +1309,10 @@ class ExperimentPanel(QWidget):
         self.sin_box.setVisible(mode == "SIN параметры")
         self.pulse_box.setVisible(mode == "PULSE параметры")
 
+        self.adjustSize()
+        if self.window():
+            self.window().adjustSize()
+            
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Каталог сохранения")
         if folder:
