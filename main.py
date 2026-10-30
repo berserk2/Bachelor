@@ -1318,9 +1318,6 @@ class ExperimentPanel(QWidget):
         self.sin_box.setVisible(mode == "SIN параметры")
         self.pulse_box.setVisible(mode == "PULSE параметры")
 
-        self.adjustSize()
-        if self.window():
-            self.window().adjustSize()
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Каталог сохранения")
