@@ -1284,10 +1284,10 @@ class ExperimentPanel(QWidget):
         # 5. Прогресс и лог (вот они как раз динамически растягиваются)
         self.progress_bar = QProgressBar()
         layout.addWidget(self.progress_bar)
-
         self.log_window = QTextEdit()
         self.log_window.setReadOnly(True)
-        layout.addWidget(self.log_window, stretch=1)  # Забирает всё свободное место при увеличении окна
+        self.log_window.setMinimumHeight(100)  # Не схлопнется меньше 100px
+        layout.addWidget(self.log_window, 1)
 
         # 6. Кнопки запуска
         btn_layout = QHBoxLayout()
@@ -1312,7 +1312,7 @@ class ExperimentPanel(QWidget):
         self.adjustSize()
         if self.window():
             self.window().adjustSize()
-            
+
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Каталог сохранения")
         if folder:
@@ -1782,7 +1782,7 @@ class RigolControlApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Rigol Automated Measurement Suite")
-        self.setMinimumSize(950, 750)
+        self.setMinimumSize(950, 820)
 
         self.rm = pyvisa.ResourceManager()
         self.gen_driver: Optional[RigolGeneratorDriver] = None
