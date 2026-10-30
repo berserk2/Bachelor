@@ -1302,6 +1302,15 @@ class ExperimentPanel(QWidget):
 
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_stop)
+
+        self.btn_start.setMinimumHeight(45)  # Фиксированная комфортная высота
+        self.btn_stop.setMinimumHeight(45)
+
+        # Запрещаем выталкивать кнопки за экран
+        from PyQt5.QtWidgets import QSizePolicy
+        self.btn_start.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.btn_stop.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        
         layout.addLayout(btn_layout)
 
     def on_mode_changed(self, mode: str):
