@@ -1029,6 +1029,9 @@ class ExperimentTask:
     sa_gen_freq: float = 1e6
 
 
+# ==============================================================================
+# ПАНЕЛЬ ЭКСПЕРИМЕНТА СО СТАТИЧЕСКИМИ ПОЛЯМИ ВВОДА
+# ==============================================================================
 class ExperimentPanel(QWidget):
     start_requested = pyqtSignal(ExperimentTask)
     stop_requested = pyqtSignal()
@@ -1037,9 +1040,16 @@ class ExperimentPanel(QWidget):
         super().__init__()
         self.init_ui()
 
+    def _create_field(self, default_val: str, width: int = 100) -> QLineEdit:
+        """Вспомогательный метод для создания строго фиксированного поля ввода."""
+        edit = QLineEdit(default_val)
+        edit.setFixedWidth(width)
+        return edit
+
     def init_ui(self):
         layout = QVBoxLayout(self)
 
+        # 1. Приборы в цикле
         dev_group = QGroupBox("Приборы в цикле")
         dev_layout = QHBoxLayout(dev_group)
         self.check_gen = QCheckBox("Генератор")
@@ -1058,136 +1068,228 @@ class ExperimentPanel(QWidget):
         dev_layout.addWidget(self.check_sa)
         dev_layout.addWidget(self.check_pm)
         dev_layout.addWidget(self.check_lsa)
+        dev_layout.addStretch()
         layout.addWidget(dev_group)
 
+        # 2. Синхронизация времени
         timing_group = QGroupBox("Управление синхронизацией времени")
         timing_layout = QHBoxLayout(timing_group)
         timing_layout.addWidget(QLabel("Режим паузы между шагами:"))
         self.combo_timing_mode = QComboBox()
+        self.combo_timing_mode.setFixedWidth(380)
         self.combo_timing_mode.addItems([
             "Фиксированная пауза (из поля)",
             "Автоподстройка периода (Тестовый прогон + компенсация overhead)"
         ])
         timing_layout.addWidget(self.combo_timing_mode)
+        timing_layout.addStretch()
         layout.addWidget(timing_group)
 
+        # 3. Каталог сохранения
         folder_group = QGroupBox("Каталог сохранения")
         f_layout = QHBoxLayout(folder_group)
         self.path_input = QLineEdit(str(Path.home() / 'Rigol_Measurements'))
         self.btn_browse = QPushButton("Обзор...")
+        self.btn_browse.setFixedWidth(90)
         self.btn_browse.clicked.connect(self.browse_folder)
         f_layout.addWidget(self.path_input)
         f_layout.addWidget(self.btn_browse)
         layout.addWidget(folder_group)
 
+        # 4. Параметры развертки
         mode_group = QGroupBox("Параметры развёртки")
         m_layout = QVBoxLayout(mode_group)
 
         top_m = QHBoxLayout()
-        top_m.addWidget(QLabel("Режим:"))
+        lbl_mode = QLabel("Режим:")
+        lbl_mode.setFixedWidth(50)
+        top_m.addWidget(lbl_mode)
+
         self.mode_combo = QComboBox()
+        self.mode_combo.setFixedWidth(160)
         self.mode_combo.addItems(["DC", "SIN параметры", "PULSE параметры"])
         self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
         top_m.addWidget(self.mode_combo)
 
-        top_m.addWidget(QLabel("Целевой канал:"))
+        lbl_target = QLabel("Целевой канал:")
+        lbl_target.setFixedWidth(100)
+        top_m.addWidget(lbl_target)
+
         self.target_ch_combo = QComboBox()
+        self.target_ch_combo.setFixedWidth(120)
         self.target_ch_combo.addItems(["Канал 1", "Канал 2", "Оба канала"])
         top_m.addWidget(self.target_ch_combo)
 
-        top_m.addWidget(QLabel("Период/Пауза (с):"))
-        self.pause_input = QLineEdit("2.0")
-        self.pause_input.setFixedWidth(50)
+        lbl_pause = QLabel("Период/Пауза (с):")
+        lbl_pause.setFixedWidth(110)
+        top_m.addWidget(lbl_pause)
+
+        self.pause_input = self._create_field("2.0", 60)
         top_m.addWidget(self.pause_input)
+        top_m.addStretch()
         m_layout.addLayout(top_m)
 
+        # Разделительная рамка вокруг полей ввода сигналов
+        # --- DC БОКС ---
         self.dc_box = QWidget()
         dc_l = QHBoxLayout(self.dc_box)
-        dc_l.addWidget(QLabel("Старт (В):"))
-        self.dc_start = QLineEdit("0.0")
+        dc_l.setContentsMargins(0, 5, 0, 5)
+
+        lbl_dc_s = QLabel("Старт (В):")
+        lbl_dc_s.setFixedWidth(70)
+        self.dc_start = self._create_field("0.0", 80)
+
+        lbl_dc_st = QLabel("Шаг (В):")
+        lbl_dc_st.setFixedWidth(60)
+        self.dc_step = self._create_field("0.5", 80)
+
+        lbl_dc_n = QLabel("Кол-во шагов:")
+        lbl_dc_n.setFixedWidth(90)
+        self.dc_steps = self._create_field("5", 60)
+
+        dc_l.addWidget(lbl_dc_s)
         dc_l.addWidget(self.dc_start)
-        dc_l.addWidget(QLabel("Шаг (В):"))
-        self.dc_step = QLineEdit("0.5")
+        dc_l.addSpacing(15)
+        dc_l.addWidget(lbl_dc_st)
         dc_l.addWidget(self.dc_step)
-        dc_l.addWidget(QLabel("Кол-во шагов:"))
-        self.dc_steps = QLineEdit("5")
+        dc_l.addSpacing(15)
+        dc_l.addWidget(lbl_dc_n)
         dc_l.addWidget(self.dc_steps)
+        dc_l.addStretch()
         m_layout.addWidget(self.dc_box)
 
+        # --- SIN БОКС ---
         self.sin_box = QWidget()
         sin_l = QGridLayout(self.sin_box)
-        sin_l.addWidget(QLabel("Старт Freq (Гц):"), 0, 0)
-        self.sin_f_start = QLineEdit("1000000")
+        sin_l.setContentsMargins(0, 5, 0, 5)
+
+        lbl_sin_f = QLabel("Старт Freq (Гц):")
+        lbl_sin_f.setFixedWidth(110)
+        self.sin_f_start = self._create_field("1000000", 100)
+
+        lbl_sin_fst = QLabel("Шаг Freq:")
+        lbl_sin_fst.setFixedWidth(80)
+        self.sin_f_step = self._create_field("100000", 100)
+
+        lbl_sin_h = QLabel("High (В):")
+        lbl_sin_h.setFixedWidth(110)
+        self.sin_h_start = self._create_field("1.0", 100)
+
+        lbl_sin_hst = QLabel("Шаг High:")
+        lbl_sin_hst.setFixedWidth(80)
+        self.sin_h_step = self._create_field("0.1", 100)
+
+        lbl_sin_l = QLabel("Low (В):")
+        lbl_sin_l.setFixedWidth(110)
+        self.sin_l_start = self._create_field("-1.0", 100)
+
+        lbl_sin_lst = QLabel("Шаг Low:")
+        lbl_sin_lst.setFixedWidth(80)
+        self.sin_l_step = self._create_field("0.1", 100)
+
+        lbl_sin_n = QLabel("Кол-во шагов:")
+        lbl_sin_n.setFixedWidth(110)
+        self.sin_steps = self._create_field("5", 60)
+
+        sin_l.addWidget(lbl_sin_f, 0, 0)
         sin_l.addWidget(self.sin_f_start, 0, 1)
-        sin_l.addWidget(QLabel("Шаг Freq:"), 0, 2)
-        self.sin_f_step = QLineEdit("100000")
+        sin_l.addWidget(lbl_sin_fst, 0, 2)
         sin_l.addWidget(self.sin_f_step, 0, 3)
 
-        sin_l.addWidget(QLabel("High (В):"), 1, 0)
-        self.sin_h_start = QLineEdit("1.0")
+        sin_l.addWidget(lbl_sin_h, 1, 0)
         sin_l.addWidget(self.sin_h_start, 1, 1)
-        sin_l.addWidget(QLabel("Шаг High:"), 1, 2)
-        self.sin_h_step = QLineEdit("0.1")
+        sin_l.addWidget(lbl_sin_hst, 1, 2)
         sin_l.addWidget(self.sin_h_step, 1, 3)
 
-        sin_l.addWidget(QLabel("Low (В):"), 2, 0)
-        self.sin_l_start = QLineEdit("-1.0")
+        sin_l.addWidget(lbl_sin_l, 2, 0)
         sin_l.addWidget(self.sin_l_start, 2, 1)
-        sin_l.addWidget(QLabel("Шаг Low:"), 2, 2)
-        self.sin_l_step = QLineEdit("0.1")
+        sin_l.addWidget(lbl_sin_lst, 2, 2)
         sin_l.addWidget(self.sin_l_step, 2, 3)
 
-        sin_l.addWidget(QLabel("Шагов:"), 3, 0)
-        self.sin_steps = QLineEdit("5")
+        sin_l.addWidget(lbl_sin_n, 3, 0)
         sin_l.addWidget(self.sin_steps, 3, 1)
+        sin_l.setColumnStretch(4, 1)  # Заполняем остаток справа
         m_layout.addWidget(self.sin_box)
         self.sin_box.setVisible(False)
 
+        # --- PULSE БОКС ---
         self.pulse_box = QWidget()
         pulse_l = QGridLayout(self.pulse_box)
-        pulse_l.addWidget(QLabel("Старт Freq (Гц):"), 0, 0)
-        self.pulse_f_start = QLineEdit("1000000")
+        pulse_l.setContentsMargins(0, 5, 0, 5)
+
+        lbl_pls_f = QLabel("Старт Freq (Гц):")
+        lbl_pls_f.setFixedWidth(110)
+        self.pulse_f_start = self._create_field("1000000", 100)
+
+        lbl_pls_fst = QLabel("Шаг Freq:")
+        lbl_pls_fst.setFixedWidth(80)
+        self.pulse_f_step = self._create_field("100000", 100)
+
+        lbl_pls_h = QLabel("High (В):")
+        lbl_pls_h.setFixedWidth(110)
+        self.pulse_h_start = self._create_field("1.0", 100)
+
+        lbl_pls_hst = QLabel("Шаг High:")
+        lbl_pls_hst.setFixedWidth(80)
+        self.pulse_h_step = self._create_field("0.1", 100)
+
+        lbl_pls_l = QLabel("Low (В):")
+        lbl_pls_l.setFixedWidth(110)
+        self.pulse_l_start = self._create_field("-1.0", 100)
+
+        lbl_pls_lst = QLabel("Шаг Low:")
+        lbl_pls_lst.setFixedWidth(80)
+        self.pulse_l_step = self._create_field("0.1", 100)
+
+        lbl_pls_w = QLabel("Ширина (с):")
+        lbl_pls_w.setFixedWidth(110)
+        self.pulse_w_start = self._create_field("0.000001", 100)
+
+        lbl_pls_wst = QLabel("Шаг ширины:")
+        lbl_pls_wst.setFixedWidth(80)
+        self.pulse_w_step = self._create_field("0.0000001", 100)
+
+        lbl_pls_n = QLabel("Кол-во шагов:")
+        lbl_pls_n.setFixedWidth(110)
+        self.pulse_steps = self._create_field("5", 60)
+
+        pulse_l.addWidget(lbl_pls_f, 0, 0)
         pulse_l.addWidget(self.pulse_f_start, 0, 1)
-        pulse_l.addWidget(QLabel("Шаг Freq:"), 0, 2)
-        self.pulse_f_step = QLineEdit("100000")
+        pulse_l.addWidget(lbl_pls_fst, 0, 2)
         pulse_l.addWidget(self.pulse_f_step, 0, 3)
 
-        pulse_l.addWidget(QLabel("High (В):"), 1, 0)
-        self.pulse_h_start = QLineEdit("1.0")
+        pulse_l.addWidget(lbl_pls_h, 1, 0)
         pulse_l.addWidget(self.pulse_h_start, 1, 1)
-        pulse_l.addWidget(QLabel("Шаг High:"), 1, 2)
-        self.pulse_h_step = QLineEdit("0.1")
+        pulse_l.addWidget(lbl_pls_hst, 1, 2)
         pulse_l.addWidget(self.pulse_h_step, 1, 3)
 
-        pulse_l.addWidget(QLabel("Low (В):"), 2, 0)
-        self.pulse_l_start = QLineEdit("-1.0")
+        pulse_l.addWidget(lbl_pls_l, 2, 0)
         pulse_l.addWidget(self.pulse_l_start, 2, 1)
-        pulse_l.addWidget(QLabel("Шаг Low:"), 2, 2)
-        self.pulse_l_step = QLineEdit("0.1")
+        pulse_l.addWidget(lbl_pls_lst, 2, 2)
         pulse_l.addWidget(self.pulse_l_step, 2, 3)
 
-        pulse_l.addWidget(QLabel("Ширина (с):"), 3, 0)
-        self.pulse_w_start = QLineEdit("0.000001")
+        pulse_l.addWidget(lbl_pls_w, 3, 0)
         pulse_l.addWidget(self.pulse_w_start, 3, 1)
-        pulse_l.addWidget(QLabel("Шаг ширины:"), 3, 2)
-        self.pulse_w_step = QLineEdit("0.0000001")
+        pulse_l.addWidget(lbl_pls_wst, 3, 2)
         pulse_l.addWidget(self.pulse_w_step, 3, 3)
 
-        pulse_l.addWidget(QLabel("Шагов:"), 4, 0)
-        self.pulse_steps = QLineEdit("5")
+        pulse_l.addWidget(lbl_pls_n, 4, 0)
         pulse_l.addWidget(self.pulse_steps, 4, 1)
+        pulse_l.setColumnStretch(4, 1)
         m_layout.addWidget(self.pulse_box)
         self.pulse_box.setVisible(False)
 
         layout.addWidget(mode_group)
 
+        # 5. Прогресс и лог (вот они как раз динамически растягиваются)
         self.progress_bar = QProgressBar()
         layout.addWidget(self.progress_bar)
 
         self.log_window = QTextEdit()
         self.log_window.setReadOnly(True)
-        layout.addWidget(self.log_window)
+        layout.addWidget(self.log_window, stretch=1)  # Забирает всё свободное место при увеличении окна
 
+        # 6. Кнопки запуска
         btn_layout = QHBoxLayout()
         self.btn_start = QPushButton("Запустить эксперимент")
         self.btn_start.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;")
@@ -1209,7 +1311,8 @@ class ExperimentPanel(QWidget):
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Каталог сохранения")
-        if folder: self.path_input.setText(folder)
+        if folder:
+            self.path_input.setText(folder)
 
     def log(self, text: str):
         self.log_window.append(text)
@@ -1268,7 +1371,6 @@ class ExperimentPanel(QWidget):
     def reset_controls(self):
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
-
 
 # ==============================================================================
 # ПОТОК ВЫПОЛНЕНИЯ ЭКСПЕРИМЕНТА
