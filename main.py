@@ -1442,7 +1442,7 @@ class ExperimentThread(QThread):
         lsa: Optional[LSADriver] = self.drivers.get('lsa')
 
         # 1. Измеритель мощности
-        if self.task.use_pm and pm and self.pm_log_file:
+        if self.task.use_pm and pm and self.pm_log_file and step_num > 0:
             try:
                 pm_data = pm.measure_power()
                 current_ma = cur_volt * 150.0
@@ -1457,9 +1457,14 @@ class ExperimentThread(QThread):
                              index=False, sep=';', decimal=',')
             except Exception as e:
                 self.log_msg.emit(f"Сбой PM: {e}")
+        
+        elif self.task.use_pm and pm and step_num == 0:
+            # Для шага 0 делаем только холостой опрос прибора
+            try: pm.measure_power()
+            except Exception: pass
 
         # 2. LSA
-        if self.task.use_lsa and lsa and self.lsa_log_file:
+        if self.task.use_lsa and lsa and self.lsa_log_file and step_num > 0:
             try:
                 v_str = f"{cur_volt:.2f}".replace('.', '_')
                 smx_path = os.path.join(self.folders['lsa_smx'], f"LSA_step{step_num:03d}_{v_str}V.smx")
@@ -1480,14 +1485,19 @@ class ExperimentThread(QThread):
         # 3. Осциллограф
         if self.task.use_osc and osc:
             try:
-                if self.task.osc_ch1_enabled:
-                    osc.save_channel_data(1, step_num, cur_volt,
-                                          self.folders['osc_wave'], self.folders['osc_meas'],
-                                          self.folders['osc_screen'])
-                if self.task.osc_ch2_enabled:
-                    osc.save_channel_data(2, step_num, cur_volt,
-                                          self.folders['osc_wave'], self.folders['osc_meas'],
-                                          self.folders['osc_screen'])
+                if step_num > 0:
+                    if self.task.osc_ch1_enabled:
+                        osc.save_channel_data(1, step_num, cur_volt,
+                                              self.folders['osc_wave'], self.folders['osc_meas'],
+                                              self.folders['osc_screen'])
+                    if self.task.osc_ch2_enabled:
+                        osc.save_channel_data(2, step_num, cur_volt,
+                                              self.folders['osc_wave'], self.folders['osc_meas'],
+                                              self.folders['osc_screen'])
+                else:
+                    # Холостой захват кадра без записи CSV
+                    osc.stop()
+                    osc.safe_query(':WAV:PREAMBLE?')
                 osc.run()
             except Exception as e:
                 self.log_msg.emit(f"Сбой OSC: {e}")
@@ -1495,7 +1505,13 @@ class ExperimentThread(QThread):
         # 4. Спектроанализатор
         if self.task.use_sa and sa:
             try:
-                sa.save_trace_csv(self.folders['sa_traces'], step_num, cur_volt, cur_freq)
+                if step_num > 0:
+                    sa.save_trace_csv(self.folders['sa_traces'], step_num, cur_volt, cur_freq)
+                else:
+                    # Холостой проход развертки
+                    sa.safe_write(':init:cont off')
+                    sa.safe_write(':init:imm')
+                    sa.safe_write(':init:cont on')
             except Exception as e:
                 self.log_msg.emit(f"Сбой DSA: {e}")
 
@@ -1526,7 +1542,7 @@ class ExperimentThread(QThread):
             # ШАГ 000: КАЛИБРОВКА И ПРОГРЕВ ТРАКТА (БЕЗ ПАУЗЫ)
             # ==================================================================
             if self.task.auto_timing:
-                self.log_msg.emit("Шаг 000 (Калибровка): прогрев аппаратуры и замер задержки...")
+                self.log_msg.emit("Калибровка: прогрев аппаратуры и замер аппаратного overhead...")
                 t_cal_start = time.perf_counter()
 
                 first_val = self.task.values[0]
@@ -1575,8 +1591,8 @@ class ExperimentThread(QThread):
                 # Реальный замер всех подключенных приборов для шага 0
                 self._execute_measurement_step(0, c_volt, c_freq)
                 overhead_time = time.perf_counter() - t_cal_start
-                self.log_msg.emit(f"Шаг 000 завершен. Аппаратный overhead: {overhead_time:.3f} с")
-
+                self.log_msg.emit(f"Калибровка завершена. Overhead аппаратуры: {overhead_time:.3f} с")
+                
             num_steps = len(self.task.values)
 
             # ==================================================================
