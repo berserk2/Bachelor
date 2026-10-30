@@ -1310,7 +1310,7 @@ class ExperimentPanel(QWidget):
         from PyQt5.QtWidgets import QSizePolicy
         self.btn_start.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.btn_stop.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        
+
         layout.addLayout(btn_layout)
 
     def on_mode_changed(self, mode: str):
@@ -1790,8 +1790,8 @@ class DeviceScanThread(QThread):
 class RigolControlApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Rigol Automated Measurement Suite")
-        self.setMinimumSize(950, 820)
+        self.setWindowTitle("RigolControl")
+        self.setMinimumSize(950, 1000)
 
         self.rm = pyvisa.ResourceManager()
         self.gen_driver: Optional[RigolGeneratorDriver] = None
