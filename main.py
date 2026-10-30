@@ -1788,7 +1788,7 @@ class RigolControlApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RigolControl")
-        self.setMinimumSize(950, 1000)
+        self.setMinimumSize(950, 900)
 
         self.rm = pyvisa.ResourceManager()
         self.gen_driver: Optional[RigolGeneratorDriver] = None
