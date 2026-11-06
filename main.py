@@ -1408,13 +1408,11 @@ class ExperimentThread(QThread):
 
         # 2. Поиск следующего свободного номера эксперимента: exp_001, exp_002, ...
         exp_idx = 1
-        while True:
-            candidate_exp = os.path.join(date_folder, f"exp_{exp_idx:03d}")
-            if not os.path.exists(candidate_exp):
-                self.exp_folder = candidate_exp
-                break
-            exp_idx += 1
-
+        existing_exps = [f for f in os.listdir(date_folder) if f.startswith("exp_") and os.path.isdir(os.path.join(date_folder, f))]
+        exp_idx = len(existing_exps) + 1
+        
+        time_str = datetime.now().strftime("%H%M%S")
+        self.exp_folder = os.path.join(date_folder, f"exp_{exp_idx:03d}_{time_str}")
         os.makedirs(self.exp_folder, exist_ok=True)
         self.log_msg.emit(f"Создан каталог эксперимента: exp_{exp_idx:03d}")
         self.folders = {}
