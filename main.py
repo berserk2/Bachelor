@@ -1410,7 +1410,7 @@ class ExperimentThread(QThread):
         exp_idx = 1
         existing_exps = [f for f in os.listdir(date_folder) if f.startswith("exp_") and os.path.isdir(os.path.join(date_folder, f))]
         exp_idx = len(existing_exps) + 1
-        
+
         time_str = datetime.now().strftime("%H%M%S")
         self.exp_folder = os.path.join(date_folder, f"exp_{exp_idx:03d}_{time_str}")
         os.makedirs(self.exp_folder, exist_ok=True)
@@ -1727,7 +1727,85 @@ class ExperimentThread(QThread):
                     except Exception as e_gen:
                         self.log_msg.emit(f"Сбой отключения генератора: {e_gen}")
             self.finished_experiment.emit()
+# внедрение watchdog для всех устройств с определением устройства и перезагрузке устройств если эксперимент не завершился.
 
+    def watchdog(self, device_key: str, max_retries: int = 3) -> bool:
+        """
+        Сторожевой таймер: определяет зависший прибор, сбрасывает зависшую сессию
+        и переподключает его заново без потери текущего прогресса эксперимента.
+        """
+        driver = self.drivers.get(device_key)
+        if not driver:
+            return False
+
+        device_names = {
+            'osc': 'Осциллограф',
+            'gen': 'Генератор',
+            'sa': 'Спектроанализатор',
+            'pm': 'Измеритель мощности',
+            'lsa': 'Оптический анализатор'
+        }
+        name = device_names.get(device_key, device_key)
+
+        for attempt in range(1, max_retries + 1):
+            self.log_msg.emit(f"WATCHDOG: [{name}] не отвечает! Попытка восстановления ({attempt}/{max_retries})...")
+
+            # 1. Специфика для LSA (UDP-мост)
+            if device_key == 'lsa':
+                try:
+                    time.sleep(1.0)
+                    if driver.ping_bridge():
+                        self.log_msg.emit(f"WATCHDOG: Связь с LSA восстановлена.")
+                        return True
+                except Exception:
+                    pass
+                continue
+
+            # 2. Восстановление VISA приборов (OSC, GEN, SA, PM)
+            try:
+                raw_dev = getattr(driver, 'dev', None)
+                if raw_dev:
+                    resource_name = getattr(raw_dev, 'resource_name', None)
+                    rm = raw_dev.resource_manager
+
+                    # Аппаратный сброс висячих пакетов в USB
+                    try:
+                        raw_dev.clear()
+                    except Exception:
+                        pass
+
+                    # Принудительное закрытие сессии
+                    try:
+                        raw_dev.close()
+                    except Exception:
+                        pass
+
+                    time.sleep(1.5)  # Пауза для сброса контроллера USB-TMC
+
+                    # Повторное открытие ресурса
+                    if resource_name and rm:
+                        new_dev = rm.open_resource(resource_name)
+                        new_dev.timeout = 10000
+
+                        # Восстанавливаем дескриптор в существующем драйвере
+                        driver.dev = new_dev
+
+                        # Очищаем регистры ошибок прибора
+                        try:
+                            driver.safe_write('*CLS')
+                        except Exception:
+                            pass
+
+                        self.log_msg.emit(f"WATCHDOG: Прибор [{name}] успешно переподключен.")
+                        return True
+
+            except Exception as e:
+                self.log_msg.emit(f"WATCHDOG: Ошибка реанимации [{name}] (попытка {attempt}): {e}")
+                time.sleep(1.0)
+
+        self.log_msg.emit(f"WATCHDOG КРИТИЧЕСКИЙ СБОЙ: Прибор [{name}] не удалось восстановить.")
+        return False
+    
 # ==============================================================================
 # ПОТОК СКАНИРОВАНИЯ С ПРОВЕРКОЙ LSA.EXE И БЕЗОПАСНЫМ ОПРОСОМ VISA
 # ==============================================================================
