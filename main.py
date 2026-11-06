@@ -1401,25 +1401,42 @@ class ExperimentThread(QThread):
         self._is_running = False
 
     def _setup_folders(self):
+        # 1. Корневая папка с текущей датой: YYYYMMDD
         date_str = datetime.now().strftime("%Y%m%d")
-        self.exp_folder = os.path.join(self.task.save_dir, date_str)
+        date_folder = os.path.join(self.task.save_dir, date_str)
+        os.makedirs(date_folder, exist_ok=True)
+
+        # 2. Поиск следующего свободного номера эксперимента: exp_001, exp_002, ...
+        exp_idx = 1
+        while True:
+            candidate_exp = os.path.join(date_folder, f"exp_{exp_idx:03d}")
+            if not os.path.exists(candidate_exp):
+                self.exp_folder = candidate_exp
+                break
+            exp_idx += 1
+
         os.makedirs(self.exp_folder, exist_ok=True)
+        self.log_msg.emit(f"Создан каталог эксперимента: exp_{exp_idx:03d}")
         self.folders = {}
 
-        if self.task.use_gen:
-            self.folders['gen'] = os.path.join(self.exp_folder, "Generator")
-            os.makedirs(self.folders['gen'], exist_ok=True)
+        # 3. Подпапки для активных приборов внутри exp_XXX
+        # (Лишняя папка Generator убрана: GeneratorSettings создается автоматически при сохранении JSON)
+
         if self.task.use_osc:
             self.folders['osc_wave'] = os.path.join(self.exp_folder, "Oscilloscope", "Waveforms")
             self.folders['osc_meas'] = os.path.join(self.exp_folder, "Oscilloscope", "Measurements")
             self.folders['osc_screen'] = os.path.join(self.exp_folder, "Oscilloscope", "Screenshots")
-            for f in self.folders.values(): os.makedirs(f, exist_ok=True)
+            for f in [self.folders['osc_wave'], self.folders['osc_meas'], self.folders['osc_screen']]:
+                os.makedirs(f, exist_ok=True)
+
         if self.task.use_sa:
             self.folders['sa_traces'] = os.path.join(self.exp_folder, "SpectrumAnalyzer_DSA", "Traces")
             os.makedirs(self.folders['sa_traces'], exist_ok=True)
+
         if self.task.use_pm:
             self.folders['pm'] = os.path.join(self.exp_folder, "PowerMeter")
             os.makedirs(self.folders['pm'], exist_ok=True)
+
         if self.task.use_lsa:
             self.folders['lsa_smx'] = os.path.join(self.exp_folder, "OpticalAnalyzer_LSA", "SMX_Raw")
             self.folders['lsa_csv'] = os.path.join(self.exp_folder, "OpticalAnalyzer_LSA", "CSV_Export")
@@ -1427,23 +1444,17 @@ class ExperimentThread(QThread):
             os.makedirs(self.folders['lsa_csv'], exist_ok=True)
 
     def _init_log_files(self):
+        # Лог-файлы создаются прямо внутри папки текущего exp_XXX
         self.pm_log_file = ""
         self.lsa_log_file = ""
-        if self.task.use_pm and 'pm' in self.folders:
-            n = 1
-            while True:
-                p = os.path.join(self.folders['pm'], f"power_log_exp{n:03d}.csv")
-                if not os.path.exists(p):
-                    self.pm_log_file = p; break
-                n += 1
-        if self.task.use_lsa and 'lsa_csv' in self.folders:
-            n = 1
-            while True:
-                p = os.path.join(os.path.dirname(self.folders['lsa_csv']), f"lsa_log_exp{n:03d}.csv")
-                if not os.path.exists(p):
-                    self.lsa_log_file = p; break
-                n += 1
 
+        if self.task.use_pm and 'pm' in self.folders:
+            self.pm_log_file = os.path.join(self.folders['pm'], "power_log.csv")
+
+        if self.task.use_lsa and 'lsa_csv' in self.folders:
+            # Кладем общий лог пиков LSA в корневую папку OpticalAnalyzer_LSA
+            self.lsa_log_file = os.path.join(os.path.dirname(self.folders['lsa_csv']), "lsa_log.csv")
+            
     def _execute_measurement_step(self, step_num: int, cur_volt: float, cur_freq: float):
         """Единый опрос всех активных приборов без холостых пропусков."""
         osc: Optional[RigolOscilloscopeDriver] = self.drivers.get('osc')
