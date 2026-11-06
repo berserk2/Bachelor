@@ -1727,7 +1727,6 @@ class ExperimentThread(QThread):
                     except Exception as e_gen:
                         self.log_msg.emit(f"Сбой отключения генератора: {e_gen}")
             self.finished_experiment.emit()
-# внедрение watchdog для всех устройств с определением устройства и перезагрузке устройств если эксперимент не завершился.
 
     def watchdog(self, device_key: str, max_retries: int = 3) -> bool:
         """
